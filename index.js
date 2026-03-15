@@ -69,17 +69,104 @@ function isAdmin(interaction) {
   return interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
 }
 
-function buildCheckButtons(checkId) {
+function getDisplayName(interaction) {
+  return (
+    interaction.member?.nickname ||
+    interaction.user.globalName ||
+    interaction.user.username
+  );
+}
+
+function formatRemainingMs(ms) {
+  if (ms <= 0) return '종료';
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}분 ${seconds}초`;
+}
+
+function isCheckExpired(checkData) {
+  return Date.now() > checkData.expiresAt;
+}
+
+function buildCheckButtons(checkId, expired = false) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`join|${checkId}`)
       .setLabel('참여')
-      .setStyle(ButtonStyle.Success),
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(expired),
     new ButtonBuilder()
       .setCustomId(`list|${checkId}`)
       .setLabel('참여 명단')
       .setStyle(ButtonStyle.Primary)
   );
+}
+
+function buildCheckEmbed(checkData) {
+  const expired = isCheckExpired(checkData);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`참여체크 - ${checkData.bossName}`)
+    .setDescription(
+      expired
+        ? '참여 시간이 종료되었습니다. 늦은 참여자는 관리자가 수동으로 추가할 수 있습니다.'
+        : '참여 버튼을 누른 뒤 비밀번호를 입력해야 참여가 인정됩니다.'
+    )
+    .addFields(
+      { name: '출현 시간', value: checkData.timeText, inline: true },
+      { name: '점수', value: `${checkData.score}점`, inline: true },
+      { name: '현재 참여자', value: `${checkData.participants.length}명`, inline: true },
+      { name: '참여 제한시간', value: `${checkData.limitMinutes}분`, inline: true },
+      {
+        name: '남은 시간',
+        value: formatRemainingMs(checkData.expiresAt - Date.now()),
+        inline: true
+      },
+      {
+        name: '상태',
+        value: expired ? '참여 종료' : '참여 가능',
+        inline: true
+      }
+    );
+
+  if (checkData.imageUrl) {
+    embed.setImage(checkData.imageUrl);
+  }
+
+  return embed;
+}
+
+function awardScore(guildId, userId, userName, amount) {
+  const data = ensureGuildData(guildId);
+  const guildScores = data.guilds[guildId].scores;
+
+  if (guildScores[userId]) {
+    guildScores[userId].score += amount;
+    guildScores[userId].userName = userName;
+  } else {
+    guildScores[userId] = {
+      userId,
+      userName,
+      score: amount
+    };
+  }
+
+  saveData(data);
+}
+
+function findLatestCheckByBoss(guildId, bossName) {
+  let matched = null;
+
+  for (const [checkId, checkData] of activeChecks.entries()) {
+    if (checkData.guildId === guildId && checkData.bossName === bossName) {
+      if (!matched || checkData.createdAt > matched.checkData.createdAt) {
+        matched = { checkId, checkData };
+      }
+    }
+  }
+
+  return matched;
 }
 
 const commands = [
@@ -101,6 +188,30 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
+    .setName('보스수정')
+    .setDescription('등록된 보스 정보를 수정합니다.')
+    .addStringOption(option =>
+      option
+        .setName('보스')
+        .setDescription('수정할 보스를 선택하세요')
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addStringOption(option =>
+      option.setName('새이름').setDescription('새 보스 이름').setRequired(false)
+    )
+    .addStringOption(option =>
+      option.setName('새시간').setDescription('새 시간').setRequired(false)
+    )
+    .addIntegerOption(option =>
+      option.setName('새점수').setDescription('새 점수').setRequired(false)
+    )
+    .addStringOption(option =>
+      option.setName('새이미지url').setDescription('새 이미지 URL').setRequired(false)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
     .setName('보스목록')
     .setDescription('이 서버에 등록된 보스 목록을 봅니다.'),
 
@@ -118,6 +229,32 @@ const commands = [
       option
         .setName('비밀번호')
         .setDescription('참여자가 입력할 비밀번호')
+        .setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option
+        .setName('제한시간')
+        .setDescription('참여 가능 시간(분)')
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(180)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName('늦은참여추가')
+    .setDescription('늦은 참여자를 관리자 권한으로 수동 추가합니다.')
+    .addStringOption(option =>
+      option
+        .setName('보스')
+        .setDescription('현재 또는 최근 참여체크 보스')
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addUserOption(option =>
+      option
+        .setName('유저')
+        .setDescription('추가할 유저')
         .setRequired(true)
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
@@ -228,6 +365,72 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      if (interaction.commandName === '보스수정') {
+        if (!isAdmin(interaction)) {
+          await interaction.reply({
+            content: '이 명령어는 서버 관리자만 사용할 수 있습니다.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        const bossName = interaction.options.getString('보스');
+        const newName = interaction.options.getString('새이름');
+        const newTime = interaction.options.getString('새시간');
+        const newScore = interaction.options.getInteger('새점수');
+        const newImageUrl = interaction.options.getString('새이미지url');
+
+        if (!newName && !newTime && newScore === null && !newImageUrl) {
+          await interaction.reply({
+            content: '수정할 항목을 하나 이상 입력해야 합니다.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        const targetBoss = data.guilds[guildId].bosses.find(boss => boss.name === bossName);
+
+        if (!targetBoss) {
+          await interaction.reply({
+            content: '수정할 보스를 찾을 수 없습니다.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        if (newName) {
+          const duplicate = data.guilds[guildId].bosses.some(
+            boss => boss.name === newName && boss.name !== bossName
+          );
+
+          if (duplicate) {
+            await interaction.reply({
+              content: '같은 이름의 다른 보스가 이미 등록되어 있습니다.',
+              ephemeral: true
+            });
+            return;
+          }
+
+          targetBoss.name = newName;
+        }
+
+        if (newTime) targetBoss.timeText = newTime;
+        if (newScore !== null) targetBoss.score = newScore;
+        if (newImageUrl) targetBoss.imageUrl = newImageUrl;
+
+        saveData(data);
+
+        await interaction.reply({
+          content:
+            `보스 수정 완료\n` +
+            `이름: ${targetBoss.name}\n` +
+            `시간: ${targetBoss.timeText}\n` +
+            `점수: ${targetBoss.score}점`,
+          ephemeral: true
+        });
+        return;
+      }
+
       if (interaction.commandName === '보스목록') {
         const bosses = data.guilds[guildId].bosses;
 
@@ -262,6 +465,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
         const bossName = interaction.options.getString('보스');
         const password = interaction.options.getString('비밀번호');
+        const limitMinutes = interaction.options.getInteger('제한시간');
 
         const boss = data.guilds[guildId].bosses.find(b => b.name === bossName);
 
@@ -274,6 +478,8 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         const checkId = `${guildId}-${Date.now()}`;
+        const createdAt = Date.now();
+        const expiresAt = createdAt + limitMinutes * 60 * 1000;
 
         activeChecks.set(checkId, {
           guildId,
@@ -282,26 +488,83 @@ client.on(Events.InteractionCreate, async interaction => {
           score: boss.score,
           participants: [],
           imageUrl: boss.imageUrl || null,
-          timeText: boss.timeText
+          timeText: boss.timeText,
+          limitMinutes,
+          createdAt,
+          expiresAt
         });
 
-        const embed = new EmbedBuilder()
-          .setTitle(`참여체크 - ${boss.name}`)
-          .setDescription('참여 버튼을 누른 뒤 비밀번호를 입력해야 참여가 인정됩니다.')
-          .addFields(
-            { name: '출현 시간', value: boss.timeText, inline: true },
-            { name: '점수', value: `${boss.score}점`, inline: true },
-            { name: '현재 참여자', value: '0명', inline: true }
-          );
-
-        if (boss.imageUrl) {
-          embed.setImage(boss.imageUrl);
-        }
+        const checkData = activeChecks.get(checkId);
 
         await interaction.reply({
-          embeds: [embed],
-          components: [buildCheckButtons(checkId)]
+          embeds: [buildCheckEmbed(checkData)],
+          components: [buildCheckButtons(checkId, false)]
         });
+        return;
+      }
+
+      if (interaction.commandName === '늦은참여추가') {
+        if (!isAdmin(interaction)) {
+          await interaction.reply({
+            content: '이 명령어는 서버 관리자만 사용할 수 있습니다.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        const bossName = interaction.options.getString('보스');
+        const targetUser = interaction.options.getUser('유저');
+
+        const foundCheck = findLatestCheckByBoss(guildId, bossName);
+
+        if (!foundCheck) {
+          await interaction.reply({
+            content: '해당 보스의 진행 중이거나 최근 참여체크를 찾을 수 없습니다.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        const { checkId, checkData } = foundCheck;
+
+        const alreadyJoined = checkData.participants.some(
+          participant => participant.id === targetUser.id
+        );
+
+        if (alreadyJoined) {
+          await interaction.reply({
+            content: '이미 참여 명단에 등록된 유저입니다.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        const member = interaction.guild.members.cache.get(targetUser.id);
+        const displayName =
+          member?.nickname ||
+          targetUser.globalName ||
+          targetUser.username;
+
+        checkData.participants.push({
+          id: targetUser.id,
+          name: displayName
+        });
+
+        awardScore(guildId, targetUser.id, displayName, checkData.score);
+
+        await interaction.reply({
+          content: `${displayName} 님을 늦은 참여자로 추가했습니다. ${checkData.score}점 적립 완료.`,
+          ephemeral: true
+        });
+
+        const channel = interaction.channel;
+        if (channel) {
+          await interaction.message?.edit?.({
+            embeds: [buildCheckEmbed(checkData)],
+            components: [buildCheckButtons(checkId, isCheckExpired(checkData))]
+          }).catch(() => {});
+        }
+
         return;
       }
 
@@ -372,6 +635,14 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (action === 'join') {
+        if (isCheckExpired(checkData)) {
+          await interaction.reply({
+            content: '참여 시간이 종료되었습니다. 늦은 참여는 관리자에게 요청하세요.',
+            ephemeral: true
+          });
+          return;
+        }
+
         const modal = new ModalBuilder()
           .setCustomId(`pwmodal|${checkId}`)
           .setTitle('참여 비밀번호 입력');
@@ -426,6 +697,14 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      if (isCheckExpired(checkData)) {
+        await interaction.reply({
+          content: '참여 시간이 종료되었습니다. 늦은 참여는 관리자에게 요청하세요.',
+          ephemeral: true
+        });
+        return;
+      }
+
       const password = interaction.fields.getTextInputValue('password');
 
       if (password !== checkData.password) {
@@ -448,48 +727,18 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      const displayName =
-        interaction.member?.nickname ||
-        interaction.user.globalName ||
-        interaction.user.username;
+      const displayName = getDisplayName(interaction);
 
       checkData.participants.push({
         id: interaction.user.id,
         name: displayName
       });
 
-      const data = ensureGuildData(interaction.guildId);
-      const guildScores = data.guilds[interaction.guildId].scores;
-
-      if (guildScores[interaction.user.id]) {
-        guildScores[interaction.user.id].score += checkData.score;
-        guildScores[interaction.user.id].userName = displayName;
-      } else {
-        guildScores[interaction.user.id] = {
-          userId: interaction.user.id,
-          userName: displayName,
-          score: checkData.score
-        };
-      }
-
-      saveData(data);
-
-      const updatedEmbed = new EmbedBuilder()
-        .setTitle(`참여체크 - ${checkData.bossName}`)
-        .setDescription('참여 버튼을 누른 뒤 비밀번호를 입력해야 참여가 인정됩니다.')
-        .addFields(
-          { name: '출현 시간', value: checkData.timeText, inline: true },
-          { name: '점수', value: `${checkData.score}점`, inline: true },
-          { name: '현재 참여자', value: `${checkData.participants.length}명`, inline: true }
-        );
-
-      if (checkData.imageUrl) {
-        updatedEmbed.setImage(checkData.imageUrl);
-      }
+      awardScore(interaction.guildId, interaction.user.id, displayName, checkData.score);
 
       await interaction.update({
-        embeds: [updatedEmbed],
-        components: [buildCheckButtons(checkId)]
+        embeds: [buildCheckEmbed(checkData)],
+        components: [buildCheckButtons(checkId, isCheckExpired(checkData))]
       });
 
       await interaction.followUp({
