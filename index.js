@@ -1,5 +1,7 @@
 require('dotenv').config();
 
+const fs = require('fs');
+const path = require('path');
 const {
   Client,
   GatewayIntentBits,
@@ -16,8 +18,6 @@ const {
   Events,
   PermissionFlagsBits
 } = require('discord.js');
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
 
 const token = process.env.TOKEN;
 const clientId = process.env.CLIENT_ID;
@@ -29,63 +29,40 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
 
-const dbPath = path.join(__dirname, 'botdata.db');
-const db = new sqlite3.Database(dbPath);
-
+const dataPath = path.join(__dirname, 'data.json');
 const activeChecks = new Map();
 
-function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve(this);
-    });
-  });
+function ensureDataFile() {
+  if (!fs.existsSync(dataPath)) {
+    const initialData = {
+      guilds: {}
+    };
+    fs.writeFileSync(dataPath, JSON.stringify(initialData, null, 2), 'utf8');
+  }
 }
 
-function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
+function loadData() {
+  ensureDataFile();
+  const raw = fs.readFileSync(dataPath, 'utf8');
+  return JSON.parse(raw || '{"guilds":{}}');
 }
 
-function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
+function saveData(data) {
+  fs.writeFileSync(dataPath, JSON.stringify(data, null, 2), 'utf8');
 }
 
-async function initDatabase() {
-  await run(`
-    CREATE TABLE IF NOT EXISTS bosses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      time_text TEXT NOT NULL,
-      score INTEGER NOT NULL DEFAULT 1,
-      image_url TEXT,
-      UNIQUE(guild_id, name)
-    )
-  `);
+function ensureGuildData(guildId) {
+  const data = loadData();
 
-  await run(`
-    CREATE TABLE IF NOT EXISTS scores (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      user_name TEXT NOT NULL,
-      score INTEGER NOT NULL DEFAULT 0,
-      UNIQUE(guild_id, user_id)
-    )
-  `);
+  if (!data.guilds[guildId]) {
+    data.guilds[guildId] = {
+      bosses: [],
+      scores: {}
+    };
+    saveData(data);
+  }
 
-  console.log('DB 초기화 완료');
+  return data;
 }
 
 function isAdmin(interaction) {
@@ -180,7 +157,8 @@ client.once(Events.ClientReady, async readyClient => {
   console.log(`봇 로그인 성공: ${readyClient.user.tag}`);
 
   try {
-    await initDatabase();
+    ensureDataFile();
+    console.log('JSON 데이터 파일 준비 완료');
     await registerGuildCommands();
   } catch (error) {
     console.error('초기화 실패:', error);
@@ -192,27 +170,23 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isAutocomplete()) {
       const focused = interaction.options.getFocused();
       const guildId = interaction.guildId;
+      const data = ensureGuildData(guildId);
 
-      const bosses = await all(
-        `SELECT name FROM bosses
-         WHERE guild_id = ?
-         AND name LIKE ?
-         ORDER BY name ASC
-         LIMIT 25`,
-        [guildId, `%${focused}%`]
-      );
-
-      await interaction.respond(
-        bosses.map(boss => ({
+      const bosses = data.guilds[guildId].bosses
+        .filter(boss => boss.name.includes(focused))
+        .slice(0, 25)
+        .map(boss => ({
           name: boss.name,
           value: boss.name
-        }))
-      );
+        }));
+
+      await interaction.respond(bosses);
       return;
     }
 
     if (interaction.isChatInputCommand()) {
       const guildId = interaction.guildId;
+      let data = ensureGuildData(guildId);
 
       if (interaction.commandName === '보스추가') {
         if (!isAdmin(interaction)) {
@@ -228,37 +202,34 @@ client.on(Events.InteractionCreate, async interaction => {
         const score = interaction.options.getInteger('점수');
         const imageUrl = interaction.options.getString('이미지url');
 
-        try {
-          await run(
-            `INSERT INTO bosses (guild_id, name, time_text, score, image_url)
-             VALUES (?, ?, ?, ?, ?)`,
-            [guildId, name, timeText, score, imageUrl || null]
-          );
+        const exists = data.guilds[guildId].bosses.some(boss => boss.name === name);
 
+        if (exists) {
           await interaction.reply({
-            content: `보스 등록 완료\n이름: ${name}\n시간: ${timeText}\n점수: ${score}점`,
+            content: '같은 이름의 보스가 이미 등록되어 있습니다.',
             ephemeral: true
           });
-        } catch (error) {
-          if (String(error.message).includes('UNIQUE')) {
-            await interaction.reply({
-              content: '같은 이름의 보스가 이미 등록되어 있습니다.',
-              ephemeral: true
-            });
-          } else {
-            throw error;
-          }
+          return;
         }
+
+        data.guilds[guildId].bosses.push({
+          name,
+          timeText,
+          score,
+          imageUrl: imageUrl || null
+        });
+
+        saveData(data);
+
+        await interaction.reply({
+          content: `보스 등록 완료\n이름: ${name}\n시간: ${timeText}\n점수: ${score}점`,
+          ephemeral: true
+        });
         return;
       }
 
       if (interaction.commandName === '보스목록') {
-        const bosses = await all(
-          `SELECT name, time_text, score FROM bosses
-           WHERE guild_id = ?
-           ORDER BY name ASC`,
-          [guildId]
-        );
+        const bosses = data.guilds[guildId].bosses;
 
         if (bosses.length === 0) {
           await interaction.reply({
@@ -270,7 +241,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
         const lines = bosses.map(
           (boss, index) =>
-            `${index + 1}. ${boss.name} | 시간: ${boss.time_text} | 점수: ${boss.score}점`
+            `${index + 1}. ${boss.name} | 시간: ${boss.timeText} | 점수: ${boss.score}점`
         );
 
         await interaction.reply({
@@ -292,12 +263,7 @@ client.on(Events.InteractionCreate, async interaction => {
         const bossName = interaction.options.getString('보스');
         const password = interaction.options.getString('비밀번호');
 
-        const boss = await get(
-          `SELECT name, time_text, score, image_url
-           FROM bosses
-           WHERE guild_id = ? AND name = ?`,
-          [guildId, bossName]
-        );
+        const boss = data.guilds[guildId].bosses.find(b => b.name === bossName);
 
         if (!boss) {
           await interaction.reply({
@@ -315,21 +281,21 @@ client.on(Events.InteractionCreate, async interaction => {
           password,
           score: boss.score,
           participants: [],
-          imageUrl: boss.image_url || null,
-          timeText: boss.time_text
+          imageUrl: boss.imageUrl || null,
+          timeText: boss.timeText
         });
 
         const embed = new EmbedBuilder()
           .setTitle(`참여체크 - ${boss.name}`)
           .setDescription('참여 버튼을 누른 뒤 비밀번호를 입력해야 참여가 인정됩니다.')
           .addFields(
-            { name: '출현 시간', value: boss.time_text, inline: true },
+            { name: '출현 시간', value: boss.timeText, inline: true },
             { name: '점수', value: `${boss.score}점`, inline: true },
             { name: '현재 참여자', value: '0명', inline: true }
           );
 
-        if (boss.image_url) {
-          embed.setImage(boss.image_url);
+        if (boss.imageUrl) {
+          embed.setImage(boss.imageUrl);
         }
 
         await interaction.reply({
@@ -340,13 +306,8 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (interaction.commandName === '내점수') {
-        const row = await get(
-          `SELECT score FROM scores
-           WHERE guild_id = ? AND user_id = ?`,
-          [guildId, interaction.user.id]
-        );
-
-        const score = row ? row.score : 0;
+        const scoreData = data.guilds[guildId].scores[interaction.user.id];
+        const score = scoreData ? scoreData.score : 0;
 
         await interaction.reply({
           content: `${interaction.user.username} 님의 현재 점수는 ${score}점입니다.`,
@@ -356,16 +317,9 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (interaction.commandName === '순위') {
-        const rows = await all(
-          `SELECT user_name, score
-           FROM scores
-           WHERE guild_id = ?
-           ORDER BY score DESC, user_name ASC
-           LIMIT 10`,
-          [guildId]
-        );
+        const scoreEntries = Object.values(data.guilds[guildId].scores);
 
-        if (rows.length === 0) {
+        if (scoreEntries.length === 0) {
           await interaction.reply({
             content: '아직 점수 데이터가 없습니다.',
             ephemeral: true
@@ -373,12 +327,14 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         }
 
-        const text = rows
-          .map((row, index) => `${index + 1}위 ${row.user_name} - ${row.score}점`)
+        const ranking = scoreEntries
+          .sort((a, b) => b.score - a.score || a.userName.localeCompare(b.userName))
+          .slice(0, 10)
+          .map((row, index) => `${index + 1}위 ${row.userName} - ${row.score}점`)
           .join('\n');
 
         await interaction.reply({
-          content: `서버 순위\n${text}`
+          content: `서버 순위\n${ranking}`
         });
         return;
       }
@@ -392,7 +348,8 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         }
 
-        await run(`DELETE FROM scores WHERE guild_id = ?`, [guildId]);
+        data.guilds[guildId].scores = {};
+        saveData(data);
 
         await interaction.reply({
           content: '이 서버의 점수를 전부 초기화했습니다.',
@@ -501,31 +458,21 @@ client.on(Events.InteractionCreate, async interaction => {
         name: displayName
       });
 
-      const existingScore = await get(
-        `SELECT score FROM scores
-         WHERE guild_id = ? AND user_id = ?`,
-        [interaction.guildId, interaction.user.id]
-      );
+      const data = ensureGuildData(interaction.guildId);
+      const guildScores = data.guilds[interaction.guildId].scores;
 
-      if (existingScore) {
-        await run(
-          `UPDATE scores
-           SET score = ?, user_name = ?
-           WHERE guild_id = ? AND user_id = ?`,
-          [
-            existingScore.score + checkData.score,
-            displayName,
-            interaction.guildId,
-            interaction.user.id
-          ]
-        );
+      if (guildScores[interaction.user.id]) {
+        guildScores[interaction.user.id].score += checkData.score;
+        guildScores[interaction.user.id].userName = displayName;
       } else {
-        await run(
-          `INSERT INTO scores (guild_id, user_id, user_name, score)
-           VALUES (?, ?, ?, ?)`,
-          [interaction.guildId, interaction.user.id, displayName, checkData.score]
-        );
+        guildScores[interaction.user.id] = {
+          userId: interaction.user.id,
+          userName: displayName,
+          score: checkData.score
+        };
       }
+
+      saveData(data);
 
       const updatedEmbed = new EmbedBuilder()
         .setTitle(`참여체크 - ${checkData.bossName}`)
