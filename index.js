@@ -1,15 +1,69 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits } = require('discord.js');
+
+const { 
+Client, 
+GatewayIntentBits, 
+REST, 
+Routes, 
+SlashCommandBuilder, 
+Events 
+} = require('discord.js');
+
+const token = process.env.TOKEN;
+const clientId = process.env.CLIENT_ID;
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
 
-client.once('ready', () => {
-  console.log(`봇 로그인 성공: ${client.user.tag}`);
+const commands = [
+  new SlashCommandBuilder()
+    .setName('핑')
+    .setDescription('봇 응답 속도 확인'),
+
+  new SlashCommandBuilder()
+    .setName('봇상태')
+    .setDescription('봇 서버 상태 확인')
+].map(command => command.toJSON());
+
+async function registerCommands() {
+
+  const rest = new REST({ version: '10' }).setToken(token);
+
+  console.log("슬래시 명령어 등록 중...");
+
+  await rest.put(
+    Routes.applicationCommands(clientId),
+    { body: commands }
+  );
+
+  console.log("슬래시 명령어 등록 완료");
+}
+
+client.once(Events.ClientReady, async readyClient => {
+
+  console.log(`봇 로그인 성공: ${readyClient.user.tag}`);
+
+  await registerCommands();
+
 });
 
-client.login(process.env.TOKEN);
+client.on(Events.InteractionCreate, async interaction => {
+
+  if (!interaction.isChatInputCommand()) return;
+
+  if (interaction.commandName === '핑') {
+
+    await interaction.reply(`퐁! ${client.ws.ping}ms`);
+
+  }
+
+  if (interaction.commandName === '봇상태') {
+
+    await interaction.reply("봇 정상 작동 중");
+
+  }
+
+});
+
+client.login(token);
