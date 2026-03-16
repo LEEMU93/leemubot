@@ -179,14 +179,13 @@ async function resetScores(guildId) {
   await query(`DELETE FROM scores WHERE guild_id = $1`, [guildId]);
 }
 
-async function getRanking(guildId, limit = 10) {
+async function getRanking(guildId) {
   const { rows } = await query(
     `SELECT user_id, user_name, score
      FROM scores
      WHERE guild_id = $1
-     ORDER BY score DESC, user_name ASC
-     LIMIT $2`,
-    [guildId, limit]
+     ORDER BY score DESC, user_name ASC`,
+    [guildId]
   );
   return rows;
 }
@@ -776,23 +775,39 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      if (interaction.commandName === '순위') {
-        const rankingRows = await getRanking(guildId, 10);
+if (interaction.commandName === '순위') {
+  const rankingRows = await getRanking(guildId);
 
-        if (rankingRows.length === 0) {
-          await interaction.reply({ content: '아직 점수 데이터가 없습니다.', ephemeral: true });
-          return;
-        }
+  if (rankingRows.length === 0) {
+    await interaction.reply({ content: '아직 점수 데이터가 없습니다.', ephemeral: true });
+    return;
+  }
 
-        const ranking = rankingRows
-          .map((row, index) => `${index + 1}위 ${row.user_name} - ${row.score}점`)
-          .join('\n');
+  const lines = rankingRows.map(
+    (row, index) => `${index + 1}위 ${row.user_name} - ${row.score}점`
+  );
 
-        await interaction.reply({
-          content: `서버 순위\n${ranking}`
-        });
-        return;
-      }
+  const chunks = [];
+  let currentChunk = '서버 순위\n';
+
+  for (const line of lines) {
+    if ((currentChunk + line + '\n').length > 1800) {
+      chunks.push(currentChunk);
+      currentChunk = '';
+    }
+    currentChunk += line + '\n';
+  }
+
+  if (currentChunk) chunks.push(currentChunk);
+
+  await interaction.reply({ content: chunks[0] });
+
+  for (let i = 1; i < chunks.length; i++) {
+    await interaction.followUp({ content: chunks[i] });
+  }
+
+  return;
+}
 
       if (interaction.commandName === '점수초기화') {
         if (!isAdmin(interaction)) {
