@@ -69,12 +69,17 @@ function isAdmin(interaction) {
   return interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
 }
 
-function getDisplayName(interaction) {
+function getDisplayNameFromInteraction(interaction) {
   return (
     interaction.member?.nickname ||
     interaction.user.globalName ||
     interaction.user.username
   );
+}
+
+function getDisplayNameFromUser(guild, user) {
+  const member = guild.members.cache.get(user.id);
+  return member?.nickname || user.globalName || user.username;
 }
 
 function formatRemainingMs(ms) {
@@ -153,6 +158,30 @@ function awardScore(guildId, userId, userName, amount) {
   }
 
   saveData(data);
+}
+
+function adjustScore(guildId, userId, userName, amount) {
+  const data = ensureGuildData(guildId);
+  const guildScores = data.guilds[guildId].scores;
+
+  if (!guildScores[userId]) {
+    guildScores[userId] = {
+      userId,
+      userName,
+      score: 0
+    };
+  }
+
+  guildScores[userId].userName = userName;
+  guildScores[userId].score += amount;
+
+  if (guildScores[userId].score < 0) {
+    guildScores[userId].score = 0;
+  }
+
+  saveData(data);
+
+  return guildScores[userId].score;
 }
 
 function findLatestCheckByBoss(guildId, bossName) {
@@ -256,6 +285,42 @@ const commands = [
         .setName('유저')
         .setDescription('추가할 유저')
         .setRequired(true)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName('점수추가')
+    .setDescription('특정 유저에게 점수를 추가합니다.')
+    .addUserOption(option =>
+      option
+        .setName('유저')
+        .setDescription('점수를 추가할 유저')
+        .setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option
+        .setName('점수')
+        .setDescription('추가할 점수')
+        .setRequired(true)
+        .setMinValue(1)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName('점수차감')
+    .setDescription('특정 유저의 점수를 차감합니다.')
+    .addUserOption(option =>
+      option
+        .setName('유저')
+        .setDescription('점수를 차감할 유저')
+        .setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option
+        .setName('점수')
+        .setDescription('차감할 점수')
+        .setRequired(true)
+        .setMinValue(1)
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
@@ -525,7 +590,7 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         }
 
-        const { checkId, checkData } = foundCheck;
+        const { checkData } = foundCheck;
 
         const alreadyJoined = checkData.participants.some(
           participant => participant.id === targetUser.id
@@ -539,11 +604,7 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         }
 
-        const member = interaction.guild.members.cache.get(targetUser.id);
-        const displayName =
-          member?.nickname ||
-          targetUser.globalName ||
-          targetUser.username;
+        const displayName = getDisplayNameFromUser(interaction.guild, targetUser);
 
         checkData.participants.push({
           id: targetUser.id,
@@ -557,14 +618,50 @@ client.on(Events.InteractionCreate, async interaction => {
           ephemeral: true
         });
 
-        const channel = interaction.channel;
-        if (channel) {
-          await interaction.message?.edit?.({
-            embeds: [buildCheckEmbed(checkData)],
-            components: [buildCheckButtons(checkId, isCheckExpired(checkData))]
-          }).catch(() => {});
+        return;
+      }
+
+      if (interaction.commandName === '점수추가') {
+        if (!isAdmin(interaction)) {
+          await interaction.reply({
+            content: '이 명령어는 서버 관리자만 사용할 수 있습니다.',
+            ephemeral: true
+          });
+          return;
         }
 
+        const targetUser = interaction.options.getUser('유저');
+        const amount = interaction.options.getInteger('점수');
+        const displayName = getDisplayNameFromUser(interaction.guild, targetUser);
+
+        const newScore = adjustScore(guildId, targetUser.id, displayName, amount);
+
+        await interaction.reply({
+          content: `${displayName} 님에게 ${amount}점을 추가했습니다. 현재 점수: ${newScore}점`,
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (interaction.commandName === '점수차감') {
+        if (!isAdmin(interaction)) {
+          await interaction.reply({
+            content: '이 명령어는 서버 관리자만 사용할 수 있습니다.',
+            ephemeral: true
+          });
+          return;
+        }
+
+        const targetUser = interaction.options.getUser('유저');
+        const amount = interaction.options.getInteger('점수');
+        const displayName = getDisplayNameFromUser(interaction.guild, targetUser);
+
+        const newScore = adjustScore(guildId, targetUser.id, displayName, -amount);
+
+        await interaction.reply({
+          content: `${displayName} 님의 점수를 ${amount}점 차감했습니다. 현재 점수: ${newScore}점`,
+          ephemeral: true
+        });
         return;
       }
 
@@ -727,7 +824,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      const displayName = getDisplayName(interaction);
+      const displayName = getDisplayNameFromInteraction(interaction);
 
       checkData.participants.push({
         id: interaction.user.id,
