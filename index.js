@@ -190,6 +190,12 @@ async function getRanking(guildId) {
   return rows;
 }
 
+async function deleteGuildData(guildId) {
+  await query(`DELETE FROM bosses WHERE guild_id = $1`, [guildId]);
+  await query(`DELETE FROM scores WHERE guild_id = $1`, [guildId]);
+  await query(`DELETE FROM guilds WHERE guild_id = $1`, [guildId]);
+}
+
 /* --------------------------- util / builders -------------------------- */
 
 function isAdmin(interaction) {
@@ -499,6 +505,25 @@ client.on(Events.GuildCreate, async guild => {
     console.log(`새 서버 명령어 자동 등록 완료: ${guild.name}`);
   } catch (error) {
     console.error('새 서버 명령어 등록 실패:', error);
+  }
+});
+
+client.on(Events.GuildDelete, async guild => {
+  try {
+    // 1) 메모리에 남아 있는 참여체크 삭제
+    for (const [checkId, checkData] of activeChecks.entries()) {
+      if (checkData.guildId === guild.id) {
+        activeChecks.delete(checkId);
+      }
+    }
+
+    // 2) DB에서 해당 서버 데이터 삭제
+    await deleteGuildData(guild.id);
+
+    console.log(`서버 제거 감지: ${guild.name} (${guild.id})`);
+    console.log(`해당 서버 데이터 자동 삭제 완료`);
+  } catch (error) {
+    console.error('서버 삭제 자동 정리 실패:', error);
   }
 });
 
