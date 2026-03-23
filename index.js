@@ -280,12 +280,12 @@ async function adjustInventoryItem(guildId, itemName, amount) {
   );
 
   // 수량 0이면 자동 삭제하고 싶으면 이 부분 주석 해제
-  // if (newQuantity === 0) {
-  //   await query(
-  //     `DELETE FROM inventory_items WHERE guild_id = $1 AND item_name = $2`,
-  //     [guildId, itemName]
-  //   );
-  // }
+if (newQuantity === 0) {
+  await query(
+    `DELETE FROM inventory_items WHERE guild_id = $1 AND item_name = $2`,
+    [guildId, itemName]
+  );
+}
 
   return newQuantity;
 }
