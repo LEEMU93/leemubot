@@ -1521,12 +1521,12 @@ client.on(Events.InteractionCreate, async interaction => {
 
 setInterval(() => {
   const now = Date.now();
-  const TEN_HOURS = 10 * 60 * 60 * 1000;
+  const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
   for (const [checkId, checkData] of activeChecks.entries()) {
-    if (now - checkData.createdAt > TEN_HOURS) {
+    if (now - checkData.createdAt > THIRTY_DAYS) {
       activeChecks.delete(checkId);
-      console.log(`오래된 참여체크 삭제: ${checkId}`);
+      console.log(`30일 지난 참여체크 삭제: ${checkId}`);
     }
   }
 }, 60 * 60 * 1000);
