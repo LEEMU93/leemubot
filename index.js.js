@@ -13,6 +13,7 @@ const { Pool } = require('pg');
 
 const token = process.env.TOKEN;
 const clientId = process.env.CLIENT_ID;
+const guildIdForCommands = process.env.GUILD_ID;
 const databaseUrl = process.env.DATABASE_URL;
 
 if (!token) {
@@ -22,6 +23,11 @@ if (!token) {
 
 if (!clientId) {
   console.error('CLIENT_ID가 없습니다.');
+  process.exit(1);
+}
+
+if (!guildIdForCommands) {
+  console.error('GUILD_ID가 없습니다.');
   process.exit(1);
 }
 
@@ -79,6 +85,19 @@ const commands = [
         .setDescription('보스 이름')
         .setRequired(true)
         .setAutocomplete(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('비밀번호')
+        .setDescription('선택 입력')
+        .setRequired(false)
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName('제한시간')
+        .setDescription('분 단위 제한시간, 예: 60')
+        .setRequired(false)
+        .setMinValue(1)
     ),
 ];
 
@@ -113,6 +132,9 @@ async function initDatabase() {
       id SERIAL PRIMARY KEY,
       guild_id TEXT NOT NULL,
       boss_name TEXT NOT NULL,
+      password TEXT,
+      duration_minutes INTEGER,
+      expires_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
@@ -138,6 +160,21 @@ async function initDatabase() {
   `);
 
   await pool.query(`
+    ALTER TABLE participation_checks
+    ADD COLUMN IF NOT EXISTS password TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE participation_checks
+    ADD COLUMN IF NOT EXISTS duration_minutes INTEGER;
+  `);
+
+  await pool.query(`
+    ALTER TABLE participation_checks
+    ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
+  `);
+
+  await pool.query(`
     DO $$
     BEGIN
       IF NOT EXISTS (
@@ -156,7 +193,7 @@ async function initDatabase() {
 }
 
 // -------------------------
-// 슬래시 명령어 등록
+// 슬래시 명령어 등록 (길드 전용)
 // -------------------------
 async function registerCommands() {
   console.log('슬래시 명령어 등록 시작');
@@ -164,7 +201,7 @@ async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(token);
 
   await rest.put(
-    Routes.applicationCommands(clientId),
+    Routes.applicationGuildCommands(clientId, guildIdForCommands),
     { body: commands.map((command) => command.toJSON()) }
   );
 
@@ -240,13 +277,29 @@ async function searchBossNames(guildId, keyword) {
   return result.rows.map((row) => row.name);
 }
 
-async function createParticipationCheck(guildId, bossName) {
+async function createParticipationCheck(guildId, bossName, password, durationMinutes) {
+  let expiresAt = null;
+
+  if (durationMinutes && Number.isInteger(durationMinutes)) {
+    const result = await pool.query(
+      `SELECT NOW() + ($1 || ' minutes')::interval AS expires_at`,
+      [durationMinutes]
+    );
+    expiresAt = result.rows[0].expires_at;
+  }
+
   await pool.query(
     `
-    INSERT INTO participation_checks (guild_id, boss_name)
-    VALUES ($1, $2)
+    INSERT INTO participation_checks (
+      guild_id,
+      boss_name,
+      password,
+      duration_minutes,
+      expires_at
+    )
+    VALUES ($1, $2, $3, $4, $5)
     `,
-    [guildId, bossName]
+    [guildId, bossName, password || null, durationMinutes || null, expiresAt]
   );
 }
 
@@ -362,6 +415,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply();
 
       const bossName = interaction.options.getString('보스');
+      const password = interaction.options.getString('비밀번호');
+      const durationMinutes = interaction.options.getInteger('제한시간');
 
       await ensureGuild(guildId);
 
@@ -375,13 +430,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      await createParticipationCheck(guildId, bossName);
+      await createParticipationCheck(guildId, bossName, password, durationMinutes);
 
       const embed = new EmbedBuilder()
         .setTitle(`📢 ${bossName} 참여체크`)
-        .setDescription('참여할 사람은 아래 버튼 기능 추가 전까지 수동으로 확인해 주세요.')
         .setColor(0x5865f2)
         .setTimestamp();
+
+      let description = '참여할 사람은 아래 버튼 기능 추가 전까지 수동으로 확인해 주세요.';
+
+      if (password) {
+        description += `\n비밀번호: ${password}`;
+      }
+
+      if (durationMinutes) {
+        description += `\n제한시간: ${durationMinutes}분`;
+      }
+
+      embed.setDescription(description);
 
       if (boss.image_url && /^https?:\/\//i.test(boss.image_url)) {
         embed.setImage(boss.image_url);
