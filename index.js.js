@@ -67,7 +67,11 @@ const commands = [
       option.setName('이미지').setDescription('보스 이미지 URL').setRequired(false)
     )
     .addIntegerOption((option) =>
-      option.setName('점수').setDescription('참여 시 지급할 점수').setRequired(false).setMinValue(0)
+      option
+        .setName('점수')
+        .setDescription('참여 시 지급할 점수')
+        .setRequired(false)
+        .setMinValue(0)
     ),
 
   new SlashCommandBuilder()
@@ -87,7 +91,11 @@ const commands = [
       option.setName('이미지').setDescription('새 보스 이미지 URL').setRequired(false)
     )
     .addIntegerOption((option) =>
-      option.setName('점수').setDescription('새 참여 점수').setRequired(false).setMinValue(0)
+      option
+        .setName('점수')
+        .setDescription('새 참여 점수')
+        .setRequired(false)
+        .setMinValue(0)
     ),
 
   new SlashCommandBuilder()
@@ -112,7 +120,11 @@ const commands = [
       option.setName('대상').setDescription('점수 추가 대상').setRequired(true)
     )
     .addIntegerOption((option) =>
-      option.setName('점수').setDescription('추가할 점수').setRequired(true).setMinValue(1)
+      option
+        .setName('점수')
+        .setDescription('추가할 점수')
+        .setRequired(true)
+        .setMinValue(1)
     ),
 
   new SlashCommandBuilder()
@@ -122,7 +134,11 @@ const commands = [
       option.setName('대상').setDescription('점수 차감 대상').setRequired(true)
     )
     .addIntegerOption((option) =>
-      option.setName('점수').setDescription('차감할 점수').setRequired(true).setMinValue(1)
+      option
+        .setName('점수')
+        .setDescription('차감할 점수')
+        .setRequired(true)
+        .setMinValue(1)
     ),
 
   new SlashCommandBuilder()
@@ -144,7 +160,11 @@ const commands = [
       option.setName('아이템명').setDescription('아이템 이름').setRequired(true)
     )
     .addIntegerOption((option) =>
-      option.setName('수량').setDescription('추가할 수량').setRequired(true).setMinValue(1)
+      option
+        .setName('수량')
+        .setDescription('추가할 수량')
+        .setRequired(true)
+        .setMinValue(1)
     ),
 
   new SlashCommandBuilder()
@@ -154,21 +174,33 @@ const commands = [
       option.setName('아이템명').setDescription('아이템 이름').setRequired(true)
     )
     .addIntegerOption((option) =>
-      option.setName('수량').setDescription('차감할 수량').setRequired(true).setMinValue(1)
+      option
+        .setName('수량')
+        .setDescription('차감할 수량')
+        .setRequired(true)
+        .setMinValue(1)
     ),
 
   new SlashCommandBuilder()
     .setName('다이아추가')
     .setDescription('다이아를 추가합니다')
     .addIntegerOption((option) =>
-      option.setName('수량').setDescription('추가할 다이아 수량').setRequired(true).setMinValue(1)
+      option
+        .setName('수량')
+        .setDescription('추가할 다이아 수량')
+        .setRequired(true)
+        .setMinValue(1)
     ),
 
   new SlashCommandBuilder()
     .setName('다이아차감')
     .setDescription('다이아를 차감합니다')
     .addIntegerOption((option) =>
-      option.setName('수량').setDescription('차감할 다이아 수량').setRequired(true).setMinValue(1)
+      option
+        .setName('수량')
+        .setDescription('차감할 다이아 수량')
+        .setRequired(true)
+        .setMinValue(1)
     ),
 
   new SlashCommandBuilder()
@@ -529,23 +561,26 @@ async function getGuildRanking(guildId) {
   return result.rows;
 }
 
+async function getDisplayNameInGuild(guild, userId, fallbackName) {
+  try {
+    const member = await guild.members.fetch(userId);
+    return (
+      member.nickname ||
+      member.displayName ||
+      member.user.globalName ||
+      member.user.username ||
+      fallbackName
+    );
+  } catch (_) {
+    return fallbackName;
+  }
+}
+
 async function getDisplayNamesForRanking(guild, rankingRows) {
   const mapped = [];
 
   for (const row of rankingRows) {
-    let displayName = row.username;
-
-    try {
-      const member = await guild.members.fetch(row.user_id);
-      displayName =
-        member.nickname ||
-        member.displayName ||
-        member.user.globalName ||
-        member.user.username ||
-        row.username;
-    } catch (_) {
-      displayName = row.username;
-    }
+    const displayName = await getDisplayNameInGuild(guild, row.user_id, row.username);
 
     mapped.push({
       user_id: row.user_id,
@@ -831,48 +866,41 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (commandName === '참여체크') {
-      await interaction.deferReply();
-
-      const password = interaction.options.getString('비밀번호') || '';
-      const durationMinutes = interaction.options.getInteger('제한시간') || 0;
       const bossName = interaction.options.getString('보스');
-
       const boss = await getBossByName(guildId, bossName);
 
       if (!boss) {
-        await interaction.editReply(`❌ 등록되지 않은 보스입니다: ${bossName}`);
+        await interaction.reply({
+          content: `❌ 등록되지 않은 보스입니다: ${bossName}`,
+          ephemeral: true,
+        });
         return;
       }
 
-      const checkId = await createParticipationCheck(
-        guildId,
-        boss,
-        password,
-        durationMinutes,
-        interaction.user.id
+      const modal = new ModalBuilder()
+        .setCustomId(`createcheck:${boss.id}`)
+        .setTitle(`${boss.name} 참여체크 생성`);
+
+      const passwordInput = new TextInputBuilder()
+        .setCustomId('check_password')
+        .setLabel('비밀번호')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setPlaceholder('예: 1234');
+
+      const durationInput = new TextInputBuilder()
+        .setCustomId('check_duration')
+        .setLabel('제한시간(분)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setPlaceholder('예: 60');
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(passwordInput),
+        new ActionRowBuilder().addComponents(durationInput)
       );
 
-      const embed = new EmbedBuilder()
-        .setTitle(`📢 ${boss.name} 참여체크`)
-        .setDescription(
-          [
-            `참여체크 ID: ${checkId}`,
-            `기본 점수: ${boss.score}`,
-            password ? `비밀번호 있음` : `비밀번호 없음`,
-            durationMinutes > 0 ? `제한시간: ${durationMinutes}분` : `제한시간 없음`,
-          ].join('\n')
-        )
-        .setColor(0x5865f2)
-        .setTimestamp();
-
-      if (boss.image_url && /^https?:\/\//i.test(boss.image_url)) {
-        embed.setImage(boss.image_url);
-      }
-
-      await interaction.editReply({
-        embeds: [embed],
-        components: buildMainButtons(checkId),
-      });
+      await interaction.showModal(modal);
       return;
     }
 
@@ -1062,10 +1090,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const lines = entries.map((entry, index) => {
+      const lines = [];
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        const displayName = await getDisplayNameInGuild(
+          interaction.guild,
+          entry.user_id,
+          entry.username
+        );
         const lateText = entry.is_late ? ' (늦은참여)' : '';
-        return `${index + 1}. ${entry.username}${lateText}`;
-      });
+        lines.push(`${i + 1}. ${displayName}${lateText}`);
+      }
 
       await interaction.reply({
         content: lines.join('\n'),
@@ -1158,60 +1193,135 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
     const [action, idValue] = interaction.customId.split(':');
-    if (action !== 'pwmodal') return;
 
-    const checkId = Number(idValue);
-    const inputPassword = interaction.fields.getTextInputValue('password_input');
-    const check = await getParticipationCheckById(checkId);
+    if (action === 'createcheck') {
+      const bossId = Number(idValue);
 
-    if (!check) {
+      const bossResult = await pool.query(
+        `
+        SELECT *
+        FROM bosses
+        WHERE id = $1 AND guild_id = $2
+        `,
+        [bossId, interaction.guild.id]
+      );
+      const boss = bossResult.rows[0];
+
+      if (!boss) {
+        await interaction.reply({
+          content: '❌ 보스를 찾지 못했습니다.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const password = interaction.fields.getTextInputValue('check_password').trim();
+      const durationRaw = interaction.fields.getTextInputValue('check_duration').trim();
+      const durationMinutes = Number(durationRaw);
+
+      if (!password) {
+        await interaction.reply({
+          content: '❌ 비밀번호는 필수입니다.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (!Number.isInteger(durationMinutes) || durationMinutes <= 0) {
+        await interaction.reply({
+          content: '❌ 제한시간은 1 이상의 숫자로 입력해야 합니다.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const checkId = await createParticipationCheck(
+        interaction.guild.id,
+        boss,
+        password,
+        durationMinutes,
+        interaction.user.id
+      );
+
+      const embed = new EmbedBuilder()
+        .setTitle(`📢 ${boss.name} 참여체크`)
+        .setDescription(
+          [
+            `참여체크 ID: ${checkId}`,
+            `기본 점수: ${boss.score}`,
+            `비밀번호 있음`,
+            `제한시간: ${durationMinutes}분`,
+          ].join('\n')
+        )
+        .setColor(0x5865f2)
+        .setTimestamp();
+
+      if (boss.image_url && /^https?:\/\//i.test(boss.image_url)) {
+        embed.setImage(boss.image_url);
+      }
+
       await interaction.reply({
-        content: '이미 삭제되었거나 없는 참여체크입니다.',
-        ephemeral: true,
+        embeds: [embed],
+        components: buildMainButtons(checkId),
       });
       return;
     }
 
-    if (check.expires_at > 0 && Date.now() > Number(check.expires_at)) {
+    if (action === 'pwmodal') {
+      const checkId = Number(idValue);
+      const inputPassword = interaction.fields.getTextInputValue('password_input');
+      const check = await getParticipationCheckById(checkId);
+
+      if (!check) {
+        await interaction.reply({
+          content: '이미 삭제되었거나 없는 참여체크입니다.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (check.expires_at > 0 && Date.now() > Number(check.expires_at)) {
+        await interaction.reply({
+          content: '참여 제한시간이 지났습니다.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if ((check.password || '') !== inputPassword) {
+        await interaction.reply({
+          content: '❌ 비밀번호가 틀렸습니다.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const added = await addParticipationEntry(
+        interaction.guild.id,
+        checkId,
+        interaction.user.id,
+        interaction.user.username,
+        false
+      );
+
+      if (!added) {
+        await interaction.reply({
+          content: '이미 참여한 사용자입니다.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const boss = await getBossByName(interaction.guild.id, check.boss_name);
+      const scoreToAdd = boss?.score ?? 0;
+      await addScore(interaction.guild.id, interaction.user.id, interaction.user.username, scoreToAdd);
+
       await interaction.reply({
-        content: '참여 제한시간이 지났습니다.',
+        content: `✅ 참여 완료! ${scoreToAdd}점 적립`,
         ephemeral: true,
       });
       return;
     }
-
-    if ((check.password || '') !== inputPassword) {
-      await interaction.reply({
-        content: '❌ 비밀번호가 틀렸습니다.',
-        ephemeral: true,
-      });
-      return;
-    }
-
-    const added = await addParticipationEntry(
-      interaction.guild.id,
-      checkId,
-      interaction.user.id,
-      interaction.user.username,
-      false
-    );
-
-    if (!added) {
-      await interaction.reply({
-        content: '이미 참여한 사용자입니다.',
-        ephemeral: true,
-      });
-      return;
-    }
-
-    const boss = await getBossByName(interaction.guild.id, check.boss_name);
-    const scoreToAdd = boss?.score ?? 0;
-    await addScore(interaction.guild.id, interaction.user.id, interaction.user.username, scoreToAdd);
-
-    await interaction.reply({
-      content: `✅ 참여 완료! ${scoreToAdd}점 적립`,
-      ephemeral: true,
-    });
   } catch (error) {
     console.error('modal error:', error);
 
