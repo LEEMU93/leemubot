@@ -81,7 +81,7 @@ async function initDatabase() {
       boss_name TEXT NOT NULL,
       password TEXT,
       duration_minutes INTEGER,
-      expires_at TIMESTAMP,
+      expires_at BIGINT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
@@ -118,7 +118,12 @@ async function initDatabase() {
 
   await pool.query(`
     ALTER TABLE participation_checks
-    ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
+    ADD COLUMN IF NOT EXISTS expires_at BIGINT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE participation_checks
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
   `);
 
   await pool.query(`
@@ -190,15 +195,10 @@ async function getBossList(guildId) {
 }
 
 async function createParticipationCheck(guildId, bossName, password, durationMinutes) {
-  let expiresAt = new Date();
-
-  if (durationMinutes && Number.isInteger(durationMinutes)) {
-    const result = await pool.query(
-      `SELECT NOW() + ($1 || ' minutes')::interval AS expires_at`,
-      [durationMinutes]
-    );
-    expiresAt = result.rows[0].expires_at;
-  }
+  const nowMs = Date.now();
+  const expiresAtMs = durationMinutes && Number.isInteger(durationMinutes)
+    ? nowMs + (durationMinutes * 60 * 1000)
+    : nowMs;
 
   await pool.query(
     `
@@ -216,7 +216,7 @@ async function createParticipationCheck(guildId, bossName, password, durationMin
       bossName,
       password || '',
       durationMinutes || 0,
-      expiresAt
+      expiresAtMs,
     ]
   );
 }
@@ -256,18 +256,6 @@ async function buildCommands() {
     new SlashCommandBuilder()
       .setName('참여체크')
       .setDescription('보스 참여체크를 생성합니다')
-      .addStringOption((option) => {
-        option
-          .setName('보스')
-          .setDescription('보스를 선택하세요')
-          .setRequired(true);
-
-        for (const choice of bossChoices) {
-          option.addChoices(choice);
-        }
-
-        return option;
-      })
       .addStringOption((option) =>
         option
           .setName('비밀번호')
@@ -280,7 +268,19 @@ async function buildCommands() {
           .setDescription('분 단위 제한시간, 예: 60')
           .setRequired(false)
           .setMinValue(1)
-      ),
+      )
+      .addStringOption((option) => {
+        option
+          .setName('보스')
+          .setDescription('보스를 선택하세요')
+          .setRequired(true);
+
+        for (const choice of bossChoices) {
+          option.addChoices(choice);
+        }
+
+        return option;
+      }),
   ];
 }
 
@@ -372,9 +372,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (commandName === '참여체크') {
       await interaction.deferReply();
 
-      const bossName = interaction.options.getString('보스');
       const password = interaction.options.getString('비밀번호');
       const durationMinutes = interaction.options.getInteger('제한시간');
+      const bossName = interaction.options.getString('보스');
 
       await ensureGuild(guildId);
 
