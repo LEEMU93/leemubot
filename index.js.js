@@ -554,7 +554,7 @@ async function getGuildRanking(guildId) {
     FROM scores
     WHERE guild_id = $1
     ORDER BY score DESC, username ASC
-    LIMIT 20
+    LIMIT 200
     `,
     [guildId]
   );
