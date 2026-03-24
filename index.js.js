@@ -97,13 +97,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName('참여체크')
     .setDescription('보스 참여체크를 생성합니다')
-    .addStringOption((option) =>
-      option
-        .setName('보스')
-        .setDescription('보스 이름을 입력하면 자동완성됩니다')
-        .setRequired(true)
-        .setAutocomplete(true)
-    )
+    // 순서를 먼저 보이도록 비밀번호 -> 제한시간 -> 보스
     .addStringOption((option) =>
       option
         .setName('비밀번호')
@@ -116,6 +110,13 @@ const commands = [
         .setDescription('분 단위, 예: 60')
         .setRequired(false)
         .setMinValue(1)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('보스')
+        .setDescription('보스 이름을 입력하면 자동완성됩니다')
+        .setRequired(true)
+        .setAutocomplete(true)
     ),
 
   new SlashCommandBuilder()
@@ -553,6 +554,30 @@ async function getGuildRanking(guildId) {
   return result.rows;
 }
 
+async function getDisplayNamesForRanking(guild, rankingRows) {
+  const mapped = [];
+
+  for (const row of rankingRows) {
+    let displayName = row.username;
+
+    try {
+      const member = await guild.members.fetch(row.user_id);
+      displayName = member.nickname || member.displayName || member.user.globalName || member.user.username || row.username;
+    } catch (_) {
+      displayName = row.username;
+    }
+
+    mapped.push({
+      user_id: row.user_id,
+      username: row.username,
+      display_name: displayName,
+      score: row.score,
+    });
+  }
+
+  return mapped;
+}
+
 async function getGuildAssets(guildId) {
   await ensureGuildAssets(guildId);
   const result = await pool.query(
@@ -828,9 +853,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (commandName === '참여체크') {
       await interaction.deferReply();
 
-      const bossName = interaction.options.getString('보스');
       const password = interaction.options.getString('비밀번호') || '';
       const durationMinutes = interaction.options.getInteger('제한시간') || 0;
+      const bossName = interaction.options.getString('보스');
 
       const boss = await getBossByName(guildId, bossName);
 
@@ -944,7 +969,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply({ ephemeral: true });
 
       const score = await getUserScore(guildId, interaction.user.id);
-      await interaction.editReply(`현재 점수: ${score}`);
+      const displayName =
+        interaction.member?.nickname ||
+        interaction.member?.displayName ||
+        interaction.user.globalName ||
+        interaction.user.username;
+
+      await interaction.editReply(`${displayName}님의 현재 점수: ${score}`);
       return;
     }
 
@@ -958,7 +989,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const lines = ranking.map((row, index) => `${index + 1}. ${row.username} - ${row.score}점`);
+      const withDisplayNames = await getDisplayNamesForRanking(interaction.guild, ranking);
+      const lines = withDisplayNames.map(
+        (row, index) => `${index + 1}. ${row.display_name} - ${row.score}점`
+      );
+
       await interaction.editReply(lines.join('\n'));
       return;
     }
