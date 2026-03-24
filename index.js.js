@@ -52,9 +52,75 @@ pool.on('error', (err) => {
   console.error('PG Pool 에러:', err);
 });
 
-// -------------------------
-// DB 초기화
-// -------------------------
+const commands = [
+  new SlashCommandBuilder()
+    .setName('보스추가')
+    .setDescription('보스를 등록합니다')
+    .addStringOption((option) =>
+      option.setName('이름').setDescription('보스 이름').setRequired(true)
+    )
+    .addStringOption((option) =>
+      option.setName('이미지').setDescription('보스 이미지 URL').setRequired(false)
+    )
+    .addIntegerOption((option) =>
+      option.setName('점수').setDescription('참여 시 지급할 점수').setRequired(false).setMinValue(0)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('보스수정')
+    .setDescription('보스 정보를 수정합니다')
+    .addStringOption((option) =>
+      option.setName('기존이름').setDescription('기존 보스 이름').setRequired(true)
+    )
+    .addStringOption((option) =>
+      option.setName('새이름').setDescription('새 보스 이름').setRequired(false)
+    )
+    .addStringOption((option) =>
+      option.setName('이미지').setDescription('새 보스 이미지 URL').setRequired(false)
+    )
+    .addIntegerOption((option) =>
+      option.setName('점수').setDescription('새 참여 점수').setRequired(false).setMinValue(0)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('보스목록')
+    .setDescription('현재 서버에 등록된 보스 목록을 확인합니다'),
+
+  new SlashCommandBuilder()
+    .setName('참여체크')
+    .setDescription('보스 참여체크를 생성합니다')
+    .addStringOption((option) =>
+      option
+        .setName('보스')
+        .setDescription('보스 이름을 입력하면 자동완성됩니다')
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('비밀번호')
+        .setDescription('없으면 비워두기')
+        .setRequired(false)
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName('제한시간')
+        .setDescription('분 단위, 예: 60')
+        .setRequired(false)
+        .setMinValue(1)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('늦은참여추가')
+    .setDescription('관리자가 늦은 참여자를 수동 등록합니다')
+    .addIntegerOption((option) =>
+      option.setName('참여체크아이디').setDescription('참여체크 ID').setRequired(true)
+    )
+    .addUserOption((option) =>
+      option.setName('대상').setDescription('추가할 유저').setRequired(true)
+    ),
+];
+
 async function initDatabase() {
   console.log('DB 연결 테스트 시작');
   const test = await pool.query('SELECT NOW()');
@@ -121,9 +187,6 @@ async function initDatabase() {
   console.log('DB 초기화 완료');
 }
 
-// -------------------------
-// 공통 함수
-// -------------------------
 async function ensureGuild(guildId) {
   await pool.query(
     `
@@ -170,6 +233,21 @@ async function getBossByName(guildId, bossName) {
     [guildId, bossName]
   );
   return result.rows[0] || null;
+}
+
+async function searchBossNames(guildId, keyword) {
+  const result = await pool.query(
+    `
+    SELECT name
+    FROM bosses
+    WHERE guild_id = $1
+      AND name ILIKE $2
+    ORDER BY name ASC
+    LIMIT 25
+    `,
+    [guildId, `%${keyword}%`]
+  );
+  return result.rows.map((row) => row.name);
 }
 
 async function addBoss(guildId, name, imageUrl, score) {
@@ -315,101 +393,8 @@ function buildMainButtons(checkId) {
   ];
 }
 
-function buildBossChoices(bosses) {
-  return bosses.slice(0, 25).map((boss) => ({
-    name: boss.name.length > 100 ? boss.name.slice(0, 100) : boss.name,
-    value: boss.name,
-  }));
-}
-
-// -------------------------
-// 명령어 정의(보스 선택형)
-// -------------------------
-async function buildCommands() {
-  const bosses = await getBossList(guildIdForCommands);
-  const bossChoices = buildBossChoices(bosses);
-
-  return [
-    new SlashCommandBuilder()
-      .setName('보스추가')
-      .setDescription('보스를 등록합니다')
-      .addStringOption((option) =>
-        option.setName('이름').setDescription('보스 이름').setRequired(true)
-      )
-      .addStringOption((option) =>
-        option.setName('이미지').setDescription('보스 이미지 URL').setRequired(false)
-      )
-      .addIntegerOption((option) =>
-        option.setName('점수').setDescription('참여 시 지급할 점수').setRequired(false).setMinValue(0)
-      ),
-
-    new SlashCommandBuilder()
-      .setName('보스수정')
-      .setDescription('보스 정보를 수정합니다')
-      .addStringOption((option) =>
-        option.setName('기존이름').setDescription('기존 보스 이름').setRequired(true)
-      )
-      .addStringOption((option) =>
-        option.setName('새이름').setDescription('새 보스 이름').setRequired(false)
-      )
-      .addStringOption((option) =>
-        option.setName('이미지').setDescription('새 보스 이미지 URL').setRequired(false)
-      )
-      .addIntegerOption((option) =>
-        option.setName('점수').setDescription('새 참여 점수').setRequired(false).setMinValue(0)
-      ),
-
-    new SlashCommandBuilder()
-      .setName('보스목록')
-      .setDescription('현재 서버에 등록된 보스 목록을 확인합니다'),
-
-    new SlashCommandBuilder()
-      .setName('참여체크')
-      .setDescription('보스 참여체크를 생성합니다')
-      .addStringOption((option) =>
-        option
-          .setName('비밀번호')
-          .setDescription('없으면 비워두기')
-          .setRequired(false)
-      )
-      .addIntegerOption((option) =>
-        option
-          .setName('제한시간')
-          .setDescription('분 단위, 예: 60')
-          .setRequired(false)
-          .setMinValue(1)
-      )
-      .addStringOption((option) => {
-        option
-          .setName('보스')
-          .setDescription('보스를 선택하세요')
-          .setRequired(true);
-
-        for (const choice of bossChoices) {
-          option.addChoices(choice);
-        }
-
-        return option;
-      }),
-
-    new SlashCommandBuilder()
-      .setName('늦은참여추가')
-      .setDescription('관리자가 늦은 참여자를 수동 등록합니다')
-      .addIntegerOption((option) =>
-        option.setName('참여체크아이디').setDescription('참여체크 ID').setRequired(true)
-      )
-      .addUserOption((option) =>
-        option.setName('대상').setDescription('추가할 유저').setRequired(true)
-      ),
-  ];
-}
-
-// -------------------------
-// 명령어 등록
-// -------------------------
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(token);
-  const commands = await buildCommands();
 
   await rest.put(
     Routes.applicationCommands(clientId),
@@ -424,9 +409,6 @@ async function registerCommands() {
   console.log('길드 슬래시 명령어 등록 완료');
 }
 
-// -------------------------
-// Ready
-// -------------------------
 client.once(Events.ClientReady, async () => {
   console.log(`로그인 완료: ${client.user.tag}`);
 
@@ -438,9 +420,36 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
-// -------------------------
-// 슬래시 명령어 처리
-// -------------------------
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isAutocomplete()) return;
+  if (!interaction.guild) return;
+
+  try {
+    const guildId = interaction.guild.id;
+    const focused = interaction.options.getFocused(true);
+
+    if (interaction.commandName === '참여체크' && focused.name === '보스') {
+      const names = await searchBossNames(guildId, focused.value || '');
+
+      await interaction.respond(
+        names.map((name) => ({
+          name,
+          value: name,
+        }))
+      );
+      return;
+    }
+
+    await interaction.respond([]);
+  } catch (error) {
+    console.error('autocomplete error:', error);
+
+    try {
+      await interaction.respond([]);
+    } catch (_) {}
+  }
+});
+
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (!interaction.guild) return;
@@ -462,7 +471,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await addBoss(guildId, name, imageUrl, score);
 
       await interaction.editReply(
-        `✅ 보스 등록 완료\n이름: ${name}\n점수: ${score}\n이미지: ${imageUrl || '없음'}\n\n보스 선택 목록 갱신을 위해 Railway에서 Restart 한 번 해줘야 해.`
+        `✅ 보스 등록 완료\n이름: ${name}\n점수: ${score}\n이미지: ${imageUrl || '없음'}`
       );
       return;
     }
@@ -482,7 +491,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      await interaction.editReply(`✅ 보스 수정 완료: ${oldName}\n목록 갱신을 위해 Railway Restart 한 번 해줘야 해.`);
+      await interaction.editReply(`✅ 보스 수정 완료: ${oldName}`);
       return;
     }
 
@@ -507,9 +516,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (commandName === '참여체크') {
       await interaction.deferReply();
 
+      const bossName = interaction.options.getString('보스');
       const password = interaction.options.getString('비밀번호') || '';
       const durationMinutes = interaction.options.getInteger('제한시간') || 0;
-      const bossName = interaction.options.getString('보스');
 
       const boss = await getBossByName(guildId, bossName);
 
@@ -599,9 +608,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// -------------------------
-// 버튼 처리
-// -------------------------
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
   if (!interaction.guild) return;
@@ -708,9 +714,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// -------------------------
-// 모달 처리
-// -------------------------
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isModalSubmit()) return;
   if (!interaction.guild) return;
@@ -783,9 +786,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// -------------------------
-// 시작
-// -------------------------
 (async () => {
   try {
     await initDatabase();
