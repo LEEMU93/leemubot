@@ -68,14 +68,13 @@ const commands = [
 ];
 
 // -------------------------
-// DB 초기화 + 마이그레이션
+// DB 초기화
 // -------------------------
 async function initDatabase() {
   console.log('DB 연결 테스트 시작');
   const test = await pool.query('SELECT NOW()');
   console.log('DB 연결 성공:', test.rows[0]);
 
-  // 기본 테이블 생성
   await pool.query(`
     CREATE TABLE IF NOT EXISTS guilds (
       guild_id TEXT PRIMARY KEY
@@ -86,7 +85,11 @@ async function initDatabase() {
     CREATE TABLE IF NOT EXISTS bosses (
       id SERIAL PRIMARY KEY,
       guild_id TEXT NOT NULL,
-      name TEXT NOT NULL
+      name TEXT NOT NULL,
+      time_text TEXT,
+      score INTEGER DEFAULT 0,
+      image_url TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
@@ -99,13 +102,26 @@ async function initDatabase() {
     );
   `);
 
-  // 예전 테이블 구조를 최신 구조로 보정
   await pool.query(`
     ALTER TABLE bosses
-    ADD COLUMN IF NOT EXISTS image TEXT;
+    ADD COLUMN IF NOT EXISTS time_text TEXT;
   `);
 
-  // 유니크 제약 추가 (없을 때만)
+  await pool.query(`
+    ALTER TABLE bosses
+    ADD COLUMN IF NOT EXISTS score INTEGER DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE bosses
+    ADD COLUMN IF NOT EXISTS image_url TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE bosses
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+  `);
+
   await pool.query(`
     DO $$
     BEGIN
@@ -158,17 +174,17 @@ async function ensureGuild(guildId) {
   console.log('ensureGuild 완료:', guildId);
 }
 
-async function addBoss(guildId, name, image) {
-  console.log('addBoss 시작:', { guildId, name, image });
+async function addBoss(guildId, name, imageUrl) {
+  console.log('addBoss 시작:', { guildId, name, imageUrl });
 
   await pool.query(
     `
-    INSERT INTO bosses (guild_id, name, image)
+    INSERT INTO bosses (guild_id, name, image_url)
     VALUES ($1, $2, $3)
     ON CONFLICT (guild_id, name)
-    DO UPDATE SET image = EXCLUDED.image
+    DO UPDATE SET image_url = EXCLUDED.image_url
     `,
-    [guildId, name, image || null]
+    [guildId, name, imageUrl || null]
   );
 
   console.log('addBoss 완료:', { guildId, name });
@@ -238,10 +254,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply({ ephemeral: true });
 
       const name = interaction.options.getString('이름');
-      const image = interaction.options.getString('이미지');
+      const imageUrl = interaction.options.getString('이미지');
 
       await ensureGuild(guildId);
-      await addBoss(guildId, name, image);
+      await addBoss(guildId, name, imageUrl);
 
       await interaction.editReply({
         content: `✅ 보스 등록 완료: ${name}`,
@@ -278,8 +294,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setColor(0x5865f2)
         .setTimestamp();
 
-      if (boss.image && /^https?:\/\//i.test(boss.image)) {
-        embed.setImage(boss.image);
+      if (boss.image_url && /^https?:\/\//i.test(boss.image_url)) {
+        embed.setImage(boss.image_url);
       }
 
       await interaction.editReply({
