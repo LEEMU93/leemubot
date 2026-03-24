@@ -299,7 +299,13 @@ async function createParticipationCheck(guildId, bossName, password, durationMin
     )
     VALUES ($1, $2, $3, $4, $5)
     `,
-    [guildId, bossName, password || null, durationMinutes || null, expiresAt]
+    [
+      guildId,
+      bossName,
+      password || '',
+      durationMinutes || 0,
+      expiresAt || new Date()
+    ]
   );
 }
 
