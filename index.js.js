@@ -68,13 +68,14 @@ const commands = [
 ];
 
 // -------------------------
-// DB 초기화 + 연결 테스트
+// DB 초기화 + 마이그레이션
 // -------------------------
 async function initDatabase() {
   console.log('DB 연결 테스트 시작');
   const test = await pool.query('SELECT NOW()');
   console.log('DB 연결 성공:', test.rows[0]);
 
+  // 기본 테이블 생성
   await pool.query(`
     CREATE TABLE IF NOT EXISTS guilds (
       guild_id TEXT PRIMARY KEY
@@ -85,9 +86,7 @@ async function initDatabase() {
     CREATE TABLE IF NOT EXISTS bosses (
       id SERIAL PRIMARY KEY,
       guild_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      image TEXT,
-      UNIQUE (guild_id, name)
+      name TEXT NOT NULL
     );
   `);
 
@@ -98,6 +97,28 @@ async function initDatabase() {
       boss_name TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+  `);
+
+  // 예전 테이블 구조를 최신 구조로 보정
+  await pool.query(`
+    ALTER TABLE bosses
+    ADD COLUMN IF NOT EXISTS image TEXT;
+  `);
+
+  // 유니크 제약 추가 (없을 때만)
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'bosses_guild_id_name_key'
+      ) THEN
+        ALTER TABLE bosses
+        ADD CONSTRAINT bosses_guild_id_name_key UNIQUE (guild_id, name);
+      END IF;
+    END
+    $$;
   `);
 
   console.log('DB 초기화 완료');
@@ -242,6 +263,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!boss) {
         await interaction.editReply({
           content: `❌ 등록되지 않은 보스입니다: ${bossName}`,
+          embeds: [],
         });
 
         console.log('참여체크 실패: 보스 없음');
