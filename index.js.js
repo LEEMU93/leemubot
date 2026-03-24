@@ -195,6 +195,11 @@ async function getBossList(guildId) {
 }
 
 async function createParticipationCheck(guildId, bossName, password, durationMinutes) {
+  const nextIdResult = await pool.query(
+    `SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM participation_checks`
+  );
+  const nextId = Number(nextIdResult.rows[0].next_id);
+
   const nowMs = Date.now();
   const expiresAtMs = durationMinutes && Number.isInteger(durationMinutes)
     ? nowMs + (durationMinutes * 60 * 1000)
@@ -203,15 +208,17 @@ async function createParticipationCheck(guildId, bossName, password, durationMin
   await pool.query(
     `
     INSERT INTO participation_checks (
+      id,
       guild_id,
       boss_name,
       password,
       duration_minutes,
       expires_at
     )
-    VALUES ($1, $2, $3, $4, $5)
+    VALUES ($1, $2, $3, $4, $5, $6)
     `,
     [
+      nextId,
       guildId,
       bossName,
       password || '',
