@@ -53,10 +53,17 @@ const commands = [
     .setName('보스추가')
     .setDescription('보스를 등록합니다')
     .addStringOption((option) =>
-      option.setName('이름').setDescription('보스 이름').setRequired(true)
+      option
+        .setName('이름')
+        .setDescription('보스 이름')
+        .setRequired(true)
+        .setAutocomplete(true)
     )
     .addStringOption((option) =>
-      option.setName('이미지').setDescription('보스 이미지 URL').setRequired(false)
+      option
+        .setName('이미지')
+        .setDescription('보스 이미지 URL')
+        .setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -67,7 +74,11 @@ const commands = [
     .setName('참여체크')
     .setDescription('보스 참여체크를 생성합니다')
     .addStringOption((option) =>
-      option.setName('보스').setDescription('보스 이름').setRequired(true)
+      option
+        .setName('보스')
+        .setDescription('보스 이름')
+        .setRequired(true)
+        .setAutocomplete(true)
     ),
 ];
 
@@ -180,7 +191,7 @@ async function addBoss(guildId, name, imageUrl) {
     INSERT INTO bosses (guild_id, name, image_url)
     VALUES ($1, $2, $3)
     ON CONFLICT (guild_id, name)
-    DO UPDATE SET image_url = EXCLUDED.image_url
+    DO UPDATE SET image_url = COALESCE(EXCLUDED.image_url, bosses.image_url)
     `,
     [guildId, name, imageUrl || null]
   );
@@ -213,6 +224,22 @@ async function getBossList(guildId) {
   return result.rows;
 }
 
+async function searchBossNames(guildId, keyword) {
+  const result = await pool.query(
+    `
+    SELECT name
+    FROM bosses
+    WHERE guild_id = $1
+      AND name ILIKE $2
+    ORDER BY name ASC
+    LIMIT 25
+    `,
+    [guildId, `%${keyword}%`]
+  );
+
+  return result.rows.map((row) => row.name);
+}
+
 async function createParticipationCheck(guildId, bossName) {
   await pool.query(
     `
@@ -233,6 +260,42 @@ client.once(Events.ClientReady, async () => {
     await registerCommands();
   } catch (error) {
     console.error('슬래시 명령어 등록 실패:', error);
+  }
+});
+
+// -------------------------
+// 자동완성 처리
+// -------------------------
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isAutocomplete()) return;
+  if (!interaction.guild) return;
+
+  const guildId = interaction.guild.id;
+  const focused = interaction.options.getFocused(true);
+
+  try {
+    if (
+      (interaction.commandName === '참여체크' && focused.name === '보스') ||
+      (interaction.commandName === '보스추가' && focused.name === '이름')
+    ) {
+      const names = await searchBossNames(guildId, focused.value || '');
+
+      await interaction.respond(
+        names.slice(0, 25).map((name) => ({
+          name,
+          value: name,
+        }))
+      );
+      return;
+    }
+
+    await interaction.respond([]);
+  } catch (error) {
+    console.error('autocomplete error:', error);
+
+    try {
+      await interaction.respond([]);
+    } catch (_) {}
   }
 });
 
@@ -275,14 +338,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (bosses.length === 0) {
         await interaction.editReply({
-          content: `현재 서버(guild_id: ${guildId})에 등록된 보스가 없습니다.`,
+          content: `현재 서버 guild_id: ${guildId}\n등록된 보스가 없습니다.`,
         });
         return;
       }
 
       const lines = bosses.map((boss, index) => {
-        const timeText = boss.time_text ? ` | 시간: ${boss.time_text}` : '';
-        const scoreText = boss.score != null ? ` | 점수: ${boss.score}` : '';
+        const timeText = boss.time_text ? ` | 시간:${boss.time_text}` : '';
+        const scoreText = boss.score != null ? ` | 점수:${boss.score}` : '';
         return `${index + 1}. ${boss.name}${timeText}${scoreText}`;
       });
 
