@@ -60,6 +60,10 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
+    .setName('보스목록')
+    .setDescription('현재 서버에 등록된 보스 목록을 확인합니다'),
+
+  new SlashCommandBuilder()
     .setName('참여체크')
     .setDescription('보스 참여체크를 생성합니다')
     .addStringOption((option) =>
@@ -160,8 +164,6 @@ async function registerCommands() {
 // DB 함수
 // -------------------------
 async function ensureGuild(guildId) {
-  console.log('ensureGuild 시작:', guildId);
-
   await pool.query(
     `
     INSERT INTO guilds (guild_id)
@@ -170,13 +172,9 @@ async function ensureGuild(guildId) {
     `,
     [guildId]
   );
-
-  console.log('ensureGuild 완료:', guildId);
 }
 
 async function addBoss(guildId, name, imageUrl) {
-  console.log('addBoss 시작:', { guildId, name, imageUrl });
-
   await pool.query(
     `
     INSERT INTO bosses (guild_id, name, image_url)
@@ -186,13 +184,9 @@ async function addBoss(guildId, name, imageUrl) {
     `,
     [guildId, name, imageUrl || null]
   );
-
-  console.log('addBoss 완료:', { guildId, name });
 }
 
 async function getBoss(guildId, name) {
-  console.log('getBoss 시작:', { guildId, name });
-
   const result = await pool.query(
     `
     SELECT *
@@ -202,13 +196,24 @@ async function getBoss(guildId, name) {
     [guildId, name]
   );
 
-  console.log('getBoss 결과 개수:', result.rowCount);
   return result.rows[0] || null;
 }
 
-async function createParticipationCheck(guildId, bossName) {
-  console.log('createParticipationCheck 시작:', { guildId, bossName });
+async function getBossList(guildId) {
+  const result = await pool.query(
+    `
+    SELECT id, name, time_text, score, image_url, created_at
+    FROM bosses
+    WHERE guild_id = $1
+    ORDER BY name ASC
+    `,
+    [guildId]
+  );
 
+  return result.rows;
+}
+
+async function createParticipationCheck(guildId, bossName) {
   await pool.query(
     `
     INSERT INTO participation_checks (guild_id, boss_name)
@@ -216,8 +221,6 @@ async function createParticipationCheck(guildId, bossName) {
     `,
     [guildId, bossName]
   );
-
-  console.log('createParticipationCheck 완료:', { guildId, bossName });
 }
 
 // -------------------------
@@ -262,8 +265,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.editReply({
         content: `✅ 보스 등록 완료: ${name}`,
       });
+      return;
+    }
 
-      console.log('보스추가 응답 완료');
+    if (commandName === '보스목록') {
+      await interaction.deferReply({ ephemeral: true });
+
+      const bosses = await getBossList(guildId);
+
+      if (bosses.length === 0) {
+        await interaction.editReply({
+          content: `현재 서버(guild_id: ${guildId})에 등록된 보스가 없습니다.`,
+        });
+        return;
+      }
+
+      const lines = bosses.map((boss, index) => {
+        const timeText = boss.time_text ? ` | 시간: ${boss.time_text}` : '';
+        const scoreText = boss.score != null ? ` | 점수: ${boss.score}` : '';
+        return `${index + 1}. ${boss.name}${timeText}${scoreText}`;
+      });
+
+      await interaction.editReply({
+        content:
+          `현재 서버 guild_id: ${guildId}\n` +
+          `등록된 보스 ${bosses.length}개\n\n` +
+          lines.join('\n'),
+      });
       return;
     }
 
@@ -278,11 +306,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (!boss) {
         await interaction.editReply({
-          content: `❌ 등록되지 않은 보스입니다: ${bossName}`,
+          content: `❌ 현재 서버(guild_id: ${guildId})에 등록되지 않은 보스입니다: ${bossName}`,
           embeds: [],
         });
-
-        console.log('참여체크 실패: 보스 없음');
         return;
       }
 
@@ -302,8 +328,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: '',
         embeds: [embed],
       });
-
-      console.log('참여체크 응답 완료');
       return;
     }
   } catch (error) {
