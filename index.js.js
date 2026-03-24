@@ -66,7 +66,7 @@ const commands = [
       option.setName('이미지').setDescription('보스 이미지 URL').setRequired(false)
     )
     .addIntegerOption((option) =>
-      option.setName('점수').setDescription('기본 참여 점수').setRequired(false).setMinValue(0)
+      option.setName('점수').setDescription('참여 시 지급할 점수').setRequired(false).setMinValue(0)
     ),
 
   new SlashCommandBuilder()
@@ -79,10 +79,10 @@ const commands = [
       option.setName('새이름').setDescription('새 보스 이름').setRequired(false)
     )
     .addStringOption((option) =>
-      option.setName('이미지').setDescription('새 이미지 URL').setRequired(false)
+      option.setName('이미지').setDescription('새 보스 이미지 URL').setRequired(false)
     )
     .addIntegerOption((option) =>
-      option.setName('점수').setDescription('새 기본 참여 점수').setRequired(false).setMinValue(0)
+      option.setName('점수').setDescription('새 참여 점수').setRequired(false).setMinValue(0)
     ),
 
   new SlashCommandBuilder()
@@ -431,7 +431,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await addBoss(guildId, name, imageUrl, score);
 
-      await interaction.editReply(`✅ 보스 등록 완료: ${name}`);
+      await interaction.editReply(
+        `✅ 보스 등록 완료\n이름: ${name}\n점수: ${score}\n이미지: ${imageUrl || '없음'}`
+      );
       return;
     }
 
@@ -465,7 +467,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       const lines = bosses.map((boss, index) => {
-        return `${index + 1}. ${boss.name} | 점수:${boss.score}`;
+        return `${index + 1}. ${boss.name} | 점수:${boss.score} | 이미지:${boss.image_url ? '있음' : '없음'}`;
       });
 
       await interaction.editReply(lines.join('\n'));
