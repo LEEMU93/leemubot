@@ -1084,57 +1084,65 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      if (interaction.commandName === '참여체크') {
-        if (!isAdmin(interaction)) {
-          await interaction.reply({ content: '이 명령어는 서버 관리자만 사용할 수 있습니다.', ephemeral: true });
-          return;
-        }
+if (interaction.commandName === '참여체크') {
+  if (!isAdmin(interaction)) {
+    await interaction.reply({
+      content: '이 명령어는 서버 관리자만 사용할 수 있습니다.',
+      ephemeral: true
+    });
+    return;
+  }
 
-        const bossName = interaction.options.getString('보스');
-        const password = interaction.options.getString('비밀번호');
-        const limitMinutes = interaction.options.getInteger('제한시간');
+  await interaction.deferReply();
 
-        const boss = await getBossByName(guildId, bossName);
-        if (!boss) {
-          await interaction.reply({ content: '선택한 보스를 찾을 수 없습니다.', ephemeral: true });
-          return;
-        }
+  const bossName = interaction.options.getString('보스');
+  const password = interaction.options.getString('비밀번호');
+  const limitMinutes = interaction.options.getInteger('제한시간');
 
-        const checkId = `${guildId}-${Date.now()}`;
-        const createdAt = Date.now();
-        const expiresAt = createdAt + limitMinutes * 60 * 1000;
+  const boss = await getBossByName(guildId, bossName);
+  if (!boss) {
+    await interaction.editReply({
+      content: '선택한 보스를 찾을 수 없습니다.'
+    });
+    return;
+  }
 
-        const checkPayload = {
-          checkId,
-          guildId,
-          bossName: boss.name,
-          password,
-          score: boss.score,
-          participants: [],
-          imageUrl: boss.image_url || null,
-          timeText: boss.time_text,
-          limitMinutes,
-          createdAt,
-          expiresAt,
-          channelId: interaction.channelId,
-          messageId: null
-        };
+  const checkId = `${guildId}-${Date.now()}`;
+  const createdAt = Date.now();
+  const expiresAt = createdAt + limitMinutes * 60 * 1000;
 
-        activeChecks.set(checkId, checkPayload);
-        await createParticipationCheck(checkPayload);
+  const checkPayload = {
+    checkId,
+    guildId,
+    bossName: boss.name,
+    password,
+    score: boss.score,
+    participants: [],
+    imageUrl: boss.image_url || null,
+    timeText: boss.time_text,
+    limitMinutes,
+    createdAt,
+    expiresAt,
+    channelId: interaction.channelId,
+    messageId: null
+  };
 
-        const checkData = activeChecks.get(checkId);
+  activeChecks.set(checkId, checkPayload);
+  await createParticipationCheck(checkPayload);
 
-        const message = await interaction.reply({
-          embeds: [buildCheckEmbed(checkData)],
-          components: [buildCheckButtons(checkId, false)],
-          fetchReply: true
-        });
+  const checkData = activeChecks.get(checkId);
 
-        checkData.messageId = message.id;
-        await updateParticipationCheckMessageId(checkId, message.id);
-        return;
-      }
+  await interaction.editReply({
+    embeds: [buildCheckEmbed(checkData)],
+    components: [buildCheckButtons(checkId, false)]
+  });
+
+  const message = await interaction.fetchReply();
+
+  checkData.messageId = message.id;
+  await updateParticipationCheckMessageId(checkId, message.id);
+  return;
+}
 
       if (interaction.commandName === '늦은참여추가') {
         if (!isAdmin(interaction)) {
