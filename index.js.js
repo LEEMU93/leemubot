@@ -97,36 +97,12 @@ const commands = [
   new SlashCommandBuilder()
     .setName('참여체크')
     .setDescription('보스 참여체크를 생성합니다')
-    // 순서를 먼저 보이도록 비밀번호 -> 제한시간 -> 보스
-    .addStringOption((option) =>
-      option
-        .setName('비밀번호')
-        .setDescription('없으면 비워두기')
-        .setRequired(false)
-    )
-    .addIntegerOption((option) =>
-      option
-        .setName('제한시간')
-        .setDescription('분 단위, 예: 60')
-        .setRequired(false)
-        .setMinValue(1)
-    )
     .addStringOption((option) =>
       option
         .setName('보스')
         .setDescription('보스 이름을 입력하면 자동완성됩니다')
         .setRequired(true)
         .setAutocomplete(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName('늦은참여추가')
-    .setDescription('관리자가 늦은 참여자를 수동 등록합니다')
-    .addIntegerOption((option) =>
-      option.setName('참여체크아이디').setDescription('참여체크 ID').setRequired(true)
-    )
-    .addUserOption((option) =>
-      option.setName('대상').setDescription('추가할 유저').setRequired(true)
     ),
 
   new SlashCommandBuilder()
@@ -207,7 +183,6 @@ const adminCommands = new Set([
   '보스추가',
   '보스수정',
   '참여체크',
-  '늦은참여추가',
   '점수추가',
   '점수차감',
   '점수초기화',
@@ -562,7 +537,12 @@ async function getDisplayNamesForRanking(guild, rankingRows) {
 
     try {
       const member = await guild.members.fetch(row.user_id);
-      displayName = member.nickname || member.displayName || member.user.globalName || member.user.username || row.username;
+      displayName =
+        member.nickname ||
+        member.displayName ||
+        member.user.globalName ||
+        member.user.username ||
+        row.username;
     } catch (_) {
       displayName = row.username;
     }
@@ -893,40 +873,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         embeds: [embed],
         components: buildMainButtons(checkId),
       });
-      return;
-    }
-
-    if (commandName === '늦은참여추가') {
-      await interaction.deferReply({ ephemeral: true });
-
-      const checkId = interaction.options.getInteger('참여체크아이디');
-      const target = interaction.options.getUser('대상');
-
-      const check = await getParticipationCheckById(checkId);
-
-      if (!check) {
-        await interaction.editReply(`❌ 참여체크를 찾지 못했습니다: ${checkId}`);
-        return;
-      }
-
-      const added = await addParticipationEntry(
-        guildId,
-        checkId,
-        target.id,
-        target.username,
-        true
-      );
-
-      if (!added) {
-        await interaction.editReply(`⚠️ 이미 등록된 참여자입니다: ${target.username}`);
-        return;
-      }
-
-      const boss = await getBossByName(guildId, check.boss_name);
-      const scoreToAdd = boss?.score ?? 0;
-      await addScore(guildId, target.id, target.username, scoreToAdd);
-
-      await interaction.editReply(`✅ 늦은 참여 추가 완료: ${target.username}`);
       return;
     }
 
