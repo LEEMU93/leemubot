@@ -904,31 +904,48 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (commandName === '점수추가') {
-      await interaction.deferReply({ ephemeral: true });
+if (commandName === '점수추가') {
+  await interaction.deferReply({ ephemeral: true });
 
-      const target = interaction.options.getUser('대상');
-      const score = interaction.options.getInteger('점수');
+  const target = interaction.options.getUser('대상');
+  const score = interaction.options.getInteger('점수');
 
-      await addScore(guildId, target.id, target.username, score);
+  await addScore(guildId, target.id, target.username, score);
 
-      const current = await getUserScore(guildId, target.id);
-      await interaction.editReply(`✅ 점수 추가 완료: ${target.username} / 현재 점수 ${current}`);
-      return;
-    }
+  const current = await getUserScore(guildId, target.id);
 
-    if (commandName === '점수차감') {
-      await interaction.deferReply({ ephemeral: true });
+  // 🔥 여기 핵심 (닉네임 가져오기)
+  const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+  const displayName =
+    member?.nickname ||
+    member?.displayName ||
+    target.globalName ||
+    target.username;
 
-      const target = interaction.options.getUser('대상');
-      const score = interaction.options.getInteger('점수');
+  await interaction.editReply(`✅ 점수 추가 완료: ${displayName} / 현재 점수 ${current}`);
+  return;
+}
 
-      await addScore(guildId, target.id, target.username, -score);
+if (commandName === '점수차감') {
+  await interaction.deferReply({ ephemeral: true });
 
-      const current = await getUserScore(guildId, target.id);
-      await interaction.editReply(`✅ 점수 차감 완료: ${target.username} / 현재 점수 ${current}`);
-      return;
-    }
+  const target = interaction.options.getUser('대상');
+  const score = interaction.options.getInteger('점수');
+
+  await addScore(guildId, target.id, target.username, -score);
+
+  const current = await getUserScore(guildId, target.id);
+
+  const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+  const displayName =
+    member?.nickname ||
+    member?.displayName ||
+    target.globalName ||
+    target.username;
+
+  await interaction.editReply(`✅ 점수 차감 완료: ${displayName} / 현재 점수 ${current}`);
+  return;
+}
 
     if (commandName === '점수초기화') {
       await interaction.deferReply({ ephemeral: true });
