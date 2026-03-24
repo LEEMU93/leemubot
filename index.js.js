@@ -51,51 +51,6 @@ pool.on('error', (err) => {
   console.error('PG Pool 에러:', err);
 });
 
-const commands = [
-  new SlashCommandBuilder()
-    .setName('보스추가')
-    .setDescription('보스를 등록합니다')
-    .addStringOption((option) =>
-      option
-        .setName('이름')
-        .setDescription('보스 이름')
-        .setRequired(true)
-    )
-    .addStringOption((option) =>
-      option
-        .setName('이미지')
-        .setDescription('보스 이미지 URL')
-        .setRequired(false)
-    ),
-
-  new SlashCommandBuilder()
-    .setName('보스목록')
-    .setDescription('현재 서버에 등록된 보스 목록을 확인합니다'),
-
-  new SlashCommandBuilder()
-    .setName('참여체크')
-    .setDescription('보스 참여체크를 생성합니다')
-    .addStringOption((option) =>
-      option
-        .setName('보스')
-        .setDescription('보스 이름을 정확히 입력하세요. /보스목록 참고')
-        .setRequired(true)
-    )
-    .addStringOption((option) =>
-      option
-        .setName('비밀번호')
-        .setDescription('선택 입력')
-        .setRequired(false)
-    )
-    .addIntegerOption((option) =>
-      option
-        .setName('제한시간')
-        .setDescription('분 단위 제한시간, 예: 60')
-        .setRequired(false)
-        .setMinValue(1)
-    ),
-];
-
 async function initDatabase() {
   console.log('DB 연결 테스트 시작');
   const test = await pool.query('SELECT NOW()');
@@ -184,23 +139,6 @@ async function initDatabase() {
   console.log('DB 초기화 완료');
 }
 
-async function registerCommands() {
-  console.log('슬래시 명령어 등록 시작');
-  const rest = new REST({ version: '10' }).setToken(token);
-
-  await rest.put(
-    Routes.applicationCommands(clientId),
-    { body: [] }
-  );
-  console.log('기존 글로벌 명령어 삭제 완료');
-
-  await rest.put(
-    Routes.applicationGuildCommands(clientId, guildIdForCommands),
-    { body: commands.map((command) => command.toJSON()) }
-  );
-  console.log('길드 슬래시 명령어 등록 완료');
-}
-
 async function ensureGuild(guildId) {
   await pool.query(
     `
@@ -283,6 +221,88 @@ async function createParticipationCheck(guildId, bossName, password, durationMin
   );
 }
 
+function buildParticipateChoices(bosses) {
+  return bosses.slice(0, 25).map((boss) => ({
+    name: boss.name.length > 100 ? boss.name.slice(0, 100) : boss.name,
+    value: boss.name,
+  }));
+}
+
+async function buildCommands() {
+  const bosses = await getBossList(guildIdForCommands);
+  const bossChoices = buildParticipateChoices(bosses);
+
+  return [
+    new SlashCommandBuilder()
+      .setName('보스추가')
+      .setDescription('보스를 등록합니다')
+      .addStringOption((option) =>
+        option
+          .setName('이름')
+          .setDescription('보스 이름')
+          .setRequired(true)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('이미지')
+          .setDescription('보스 이미지 URL')
+          .setRequired(false)
+      ),
+
+    new SlashCommandBuilder()
+      .setName('보스목록')
+      .setDescription('현재 서버에 등록된 보스 목록을 확인합니다'),
+
+    new SlashCommandBuilder()
+      .setName('참여체크')
+      .setDescription('보스 참여체크를 생성합니다')
+      .addStringOption((option) => {
+        option
+          .setName('보스')
+          .setDescription('보스를 선택하세요')
+          .setRequired(true);
+
+        for (const choice of bossChoices) {
+          option.addChoices(choice);
+        }
+
+        return option;
+      })
+      .addStringOption((option) =>
+        option
+          .setName('비밀번호')
+          .setDescription('선택 입력')
+          .setRequired(false)
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName('제한시간')
+          .setDescription('분 단위 제한시간, 예: 60')
+          .setRequired(false)
+          .setMinValue(1)
+      ),
+  ];
+}
+
+async function registerCommands() {
+  console.log('슬래시 명령어 등록 시작');
+  const rest = new REST({ version: '10' }).setToken(token);
+
+  const commands = await buildCommands();
+
+  await rest.put(
+    Routes.applicationCommands(clientId),
+    { body: [] }
+  );
+  console.log('기존 글로벌 명령어 삭제 완료');
+
+  await rest.put(
+    Routes.applicationGuildCommands(clientId, guildIdForCommands),
+    { body: commands.map((command) => command.toJSON()) }
+  );
+  console.log('길드 슬래시 명령어 등록 완료');
+}
+
 client.once(Events.ClientReady, async () => {
   console.log(`로그인 완료: ${client.user.tag}`);
 
@@ -317,7 +337,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await addBoss(guildId, name, imageUrl);
 
       await interaction.editReply({
-        content: `✅ 보스 등록 완료: ${name}`,
+        content: `✅ 보스 등록 완료: ${name}\n보스 선택 목록 갱신을 위해 Railway에서 Restart 한 번 해줘야 해.`,
       });
       return;
     }
