@@ -26,7 +26,7 @@ if (!clientId) {
 }
 
 if (!databaseUrl) {
-  console.error('DATABASE_URL가 없습니다.');
+  console.error('DATABASE_URL이 없습니다.');
   process.exit(1);
 }
 
@@ -39,6 +39,10 @@ const pool = new Pool({
   ssl: {
     rejectUnauthorized: false,
   },
+});
+
+pool.on('error', (err) => {
+  console.error('PG Pool 에러:', err);
 });
 
 // -------------------------
@@ -64,9 +68,13 @@ const commands = [
 ];
 
 // -------------------------
-// DB 초기화
+// DB 초기화 + 연결 테스트
 // -------------------------
 async function initDatabase() {
+  console.log('DB 연결 테스트 시작');
+  const test = await pool.query('SELECT NOW()');
+  console.log('DB 연결 성공:', test.rows[0]);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS guilds (
       guild_id TEXT PRIMARY KEY
@@ -99,6 +107,8 @@ async function initDatabase() {
 // 슬래시 명령어 등록
 // -------------------------
 async function registerCommands() {
+  console.log('슬래시 명령어 등록 시작');
+
   const rest = new REST({ version: '10' }).setToken(token);
 
   await rest.put(
@@ -113,6 +123,8 @@ async function registerCommands() {
 // DB 함수
 // -------------------------
 async function ensureGuild(guildId) {
+  console.log('ensureGuild 시작:', guildId);
+
   await pool.query(
     `
     INSERT INTO guilds (guild_id)
@@ -121,9 +133,13 @@ async function ensureGuild(guildId) {
     `,
     [guildId]
   );
+
+  console.log('ensureGuild 완료:', guildId);
 }
 
 async function addBoss(guildId, name, image) {
+  console.log('addBoss 시작:', { guildId, name, image });
+
   await pool.query(
     `
     INSERT INTO bosses (guild_id, name, image)
@@ -133,9 +149,13 @@ async function addBoss(guildId, name, image) {
     `,
     [guildId, name, image || null]
   );
+
+  console.log('addBoss 완료:', { guildId, name });
 }
 
 async function getBoss(guildId, name) {
+  console.log('getBoss 시작:', { guildId, name });
+
   const result = await pool.query(
     `
     SELECT *
@@ -145,10 +165,13 @@ async function getBoss(guildId, name) {
     [guildId, name]
   );
 
+  console.log('getBoss 결과 개수:', result.rowCount);
   return result.rows[0] || null;
 }
 
 async function createParticipationCheck(guildId, bossName) {
+  console.log('createParticipationCheck 시작:', { guildId, bossName });
+
   await pool.query(
     `
     INSERT INTO participation_checks (guild_id, boss_name)
@@ -156,6 +179,8 @@ async function createParticipationCheck(guildId, bossName) {
     `,
     [guildId, bossName]
   );
+
+  console.log('createParticipationCheck 완료:', { guildId, bossName });
 }
 
 // -------------------------
@@ -179,32 +204,47 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.guild) return;
 
   const guildId = interaction.guild.id;
+  const commandName = interaction.commandName;
+
+  console.log('명령어 수신:', {
+    commandName,
+    guildId,
+    userId: interaction.user.id,
+  });
 
   try {
-    await ensureGuild(guildId);
+    if (commandName === '보스추가') {
+      await interaction.deferReply({ ephemeral: true });
 
-    if (interaction.commandName === '보스추가') {
       const name = interaction.options.getString('이름');
       const image = interaction.options.getString('이미지');
 
+      await ensureGuild(guildId);
       await addBoss(guildId, name, image);
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `✅ 보스 등록 완료: ${name}`,
-        ephemeral: true,
       });
+
+      console.log('보스추가 응답 완료');
       return;
     }
 
-    if (interaction.commandName === '참여체크') {
+    if (commandName === '참여체크') {
+      await interaction.deferReply();
+
       const bossName = interaction.options.getString('보스');
+
+      await ensureGuild(guildId);
+
       const boss = await getBoss(guildId, bossName);
 
       if (!boss) {
-        await interaction.reply({
+        await interaction.editReply({
           content: `❌ 등록되지 않은 보스입니다: ${bossName}`,
-          ephemeral: true,
         });
+
+        console.log('참여체크 실패: 보스 없음');
         return;
       }
 
@@ -220,19 +260,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         embed.setImage(boss.image);
       }
 
-      await interaction.reply({
+      await interaction.editReply({
+        content: '',
         embeds: [embed],
       });
+
+      console.log('참여체크 응답 완료');
       return;
     }
   } catch (error) {
     console.error('interaction error:', error);
 
     try {
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({
           content: '❌ 처리 중 오류가 발생했습니다.',
-          ephemeral: true,
+          embeds: [],
         });
       } else {
         await interaction.reply({
