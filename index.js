@@ -854,6 +854,13 @@ async function registerCommands() {
 
 client.once(Events.ClientReady, async readyClient => {
   console.log(`로그인 완료: ${readyClient.user.tag}`);
+
+  try {
+    await registerCommands();
+    console.log('슬래시 명령어 등록 완료');
+  } catch (error) {
+    console.error('슬래시 명령어 등록 실패:', error);
+  }
 });
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -1602,7 +1609,7 @@ client.on(Events.InteractionCreate, async interaction => {
       });
     }
   } catch (error) {
-    console.error('오류 발생:', error);
+    console.error('오류 발생:', error?.stack || error);
 
     if (interaction.isRepliable()) {
       if (interaction.replied || interaction.deferred) {
