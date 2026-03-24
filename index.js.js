@@ -193,19 +193,26 @@ async function initDatabase() {
 }
 
 // -------------------------
-// 슬래시 명령어 등록 (길드 전용)
+// 명령어 등록
 // -------------------------
 async function registerCommands() {
   console.log('슬래시 명령어 등록 시작');
-
   const rest = new REST({ version: '10' }).setToken(token);
 
+  // 1) 글로벌 명령어 전체 삭제
+  await rest.put(
+    Routes.applicationCommands(clientId),
+    { body: [] }
+  );
+  console.log('기존 글로벌 명령어 삭제 완료');
+
+  // 2) 길드 명령어 등록
   await rest.put(
     Routes.applicationGuildCommands(clientId, guildIdForCommands),
     { body: commands.map((command) => command.toJSON()) }
   );
 
-  console.log('슬래시 명령어 등록 완료');
+  console.log('길드 슬래시 명령어 등록 완료');
 }
 
 // -------------------------
@@ -278,7 +285,7 @@ async function searchBossNames(guildId, keyword) {
 }
 
 async function createParticipationCheck(guildId, bossName, password, durationMinutes) {
-  let expiresAt = null;
+  let expiresAt = new Date();
 
   if (durationMinutes && Number.isInteger(durationMinutes)) {
     const result = await pool.query(
@@ -304,7 +311,7 @@ async function createParticipationCheck(guildId, bossName, password, durationMin
       bossName,
       password || '',
       durationMinutes || 0,
-      expiresAt || new Date()
+      expiresAt
     ]
   );
 }
@@ -443,7 +450,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setColor(0x5865f2)
         .setTimestamp();
 
-      let description = '참여할 사람은 아래 버튼 기능 추가 전까지 수동으로 확인해 주세요.';
+      let description = '보스 참여체크를 생성했습니다.';
 
       if (password) {
         description += `\n비밀번호: ${password}`;
