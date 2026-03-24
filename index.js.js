@@ -51,9 +51,6 @@ pool.on('error', (err) => {
   console.error('PG Pool 에러:', err);
 });
 
-// -------------------------
-// 슬래시 명령어 정의
-// -------------------------
 const commands = [
   new SlashCommandBuilder()
     .setName('보스추가')
@@ -63,7 +60,6 @@ const commands = [
         .setName('이름')
         .setDescription('보스 이름')
         .setRequired(true)
-        .setAutocomplete(true)
     )
     .addStringOption((option) =>
       option
@@ -82,9 +78,8 @@ const commands = [
     .addStringOption((option) =>
       option
         .setName('보스')
-        .setDescription('보스 이름')
+        .setDescription('보스 이름을 정확히 입력하세요. /보스목록 참고')
         .setRequired(true)
-        .setAutocomplete(true)
     )
     .addStringOption((option) =>
       option
@@ -101,9 +96,6 @@ const commands = [
     ),
 ];
 
-// -------------------------
-// DB 초기화
-// -------------------------
 async function initDatabase() {
   console.log('DB 연결 테스트 시작');
   const test = await pool.query('SELECT NOW()');
@@ -192,32 +184,23 @@ async function initDatabase() {
   console.log('DB 초기화 완료');
 }
 
-// -------------------------
-// 명령어 등록
-// -------------------------
 async function registerCommands() {
   console.log('슬래시 명령어 등록 시작');
   const rest = new REST({ version: '10' }).setToken(token);
 
-  // 1) 글로벌 명령어 전체 삭제
   await rest.put(
     Routes.applicationCommands(clientId),
     { body: [] }
   );
   console.log('기존 글로벌 명령어 삭제 완료');
 
-  // 2) 길드 명령어 등록
   await rest.put(
     Routes.applicationGuildCommands(clientId, guildIdForCommands),
     { body: commands.map((command) => command.toJSON()) }
   );
-
   console.log('길드 슬래시 명령어 등록 완료');
 }
 
-// -------------------------
-// DB 함수
-// -------------------------
 async function ensureGuild(guildId) {
   await pool.query(
     `
@@ -268,22 +251,6 @@ async function getBossList(guildId) {
   return result.rows;
 }
 
-async function searchBossNames(guildId, keyword) {
-  const result = await pool.query(
-    `
-    SELECT name
-    FROM bosses
-    WHERE guild_id = $1
-      AND name ILIKE $2
-    ORDER BY name ASC
-    LIMIT 25
-    `,
-    [guildId, `%${keyword}%`]
-  );
-
-  return result.rows.map((row) => row.name);
-}
-
 async function createParticipationCheck(guildId, bossName, password, durationMinutes) {
   let expiresAt = new Date();
 
@@ -316,9 +283,6 @@ async function createParticipationCheck(guildId, bossName, password, durationMin
   );
 }
 
-// -------------------------
-// Ready 이벤트
-// -------------------------
 client.once(Events.ClientReady, async () => {
   console.log(`로그인 완료: ${client.user.tag}`);
 
@@ -329,45 +293,6 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
-// -------------------------
-// 자동완성 처리
-// -------------------------
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isAutocomplete()) return;
-  if (!interaction.guild) return;
-
-  const guildId = interaction.guild.id;
-  const focused = interaction.options.getFocused(true);
-
-  try {
-    if (
-      (interaction.commandName === '참여체크' && focused.name === '보스') ||
-      (interaction.commandName === '보스추가' && focused.name === '이름')
-    ) {
-      const names = await searchBossNames(guildId, focused.value || '');
-
-      await interaction.respond(
-        names.slice(0, 25).map((name) => ({
-          name,
-          value: name,
-        }))
-      );
-      return;
-    }
-
-    await interaction.respond([]);
-  } catch (error) {
-    console.error('autocomplete error:', error);
-
-    try {
-      await interaction.respond([]);
-    } catch (_) {}
-  }
-});
-
-// -------------------------
-// 명령어 처리
-// -------------------------
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (!interaction.guild) return;
@@ -493,9 +418,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// -------------------------
-// 시작
-// -------------------------
 (async () => {
   try {
     await initDatabase();
