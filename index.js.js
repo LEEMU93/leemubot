@@ -1,4 +1,5 @@
 require('dotenv').config();
+
 const {
   Client,
   GatewayIntentBits,
@@ -6,7 +7,7 @@ const {
   Routes,
   SlashCommandBuilder,
   EmbedBuilder,
-  Events
+  Events,
 } = require('discord.js');
 const { Pool } = require('pg');
 
@@ -25,21 +26,46 @@ if (!clientId) {
 }
 
 if (!databaseUrl) {
-  console.error('DATABASE_URL이 없습니다.');
+  console.error('DATABASE_URL가 없습니다.');
   process.exit(1);
 }
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [GatewayIntentBits.Guilds],
 });
 
 const pool = new Pool({
   connectionString: databaseUrl,
   ssl: {
-    rejectUnauthorized: false
-  }
+    rejectUnauthorized: false,
+  },
 });
 
+// -------------------------
+// 슬래시 명령어 정의
+// -------------------------
+const commands = [
+  new SlashCommandBuilder()
+    .setName('보스추가')
+    .setDescription('보스를 등록합니다')
+    .addStringOption((option) =>
+      option.setName('이름').setDescription('보스 이름').setRequired(true)
+    )
+    .addStringOption((option) =>
+      option.setName('이미지').setDescription('보스 이미지 URL').setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('참여체크')
+    .setDescription('보스 참여체크를 생성합니다')
+    .addStringOption((option) =>
+      option.setName('보스').setDescription('보스 이름').setRequired(true)
+    ),
+];
+
+// -------------------------
+// DB 초기화
+// -------------------------
 async function initDatabase() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS guilds (
@@ -53,7 +79,7 @@ async function initDatabase() {
       guild_id TEXT NOT NULL,
       name TEXT NOT NULL,
       image TEXT,
-      UNIQUE(guild_id, name)
+      UNIQUE (guild_id, name)
     );
   `);
 
@@ -69,45 +95,23 @@ async function initDatabase() {
   console.log('DB 초기화 완료');
 }
 
-const commands = [
-  new SlashCommandBuilder()
-    .setName('보스추가')
-    .setDescription('보스를 등록합니다')
-    .addStringOption(option =>
-      option
-        .setName('이름')
-        .setDescription('보스 이름')
-        .setRequired(true)
-    )
-    .addStringOption(option =>
-      option
-        .setName('이미지')
-        .setDescription('보스 이미지 URL')
-        .setRequired(false)
-    ),
-
-  new SlashCommandBuilder()
-    .setName('참여체크')
-    .setDescription('보스 참여체크를 생성합니다')
-    .addStringOption(option =>
-      option
-        .setName('보스')
-        .setDescription('보스 이름')
-        .setRequired(true)
-    )
-];
-
+// -------------------------
+// 슬래시 명령어 등록
+// -------------------------
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(token);
 
   await rest.put(
     Routes.applicationCommands(clientId),
-    { body: commands.map(command => command.toJSON()) }
+    { body: commands.map((command) => command.toJSON()) }
   );
 
   console.log('슬래시 명령어 등록 완료');
 }
 
+// -------------------------
+// DB 함수
+// -------------------------
 async function ensureGuild(guildId) {
   await pool.query(
     `
@@ -154,11 +158,23 @@ async function createParticipationCheck(guildId, bossName) {
   );
 }
 
-client.once(Events.ClientReady, () => {
+// -------------------------
+// Ready 이벤트
+// -------------------------
+client.once(Events.ClientReady, async () => {
   console.log(`로그인 완료: ${client.user.tag}`);
+
+  try {
+    await registerCommands();
+  } catch (error) {
+    console.error('슬래시 명령어 등록 실패:', error);
+  }
 });
 
-client.on(Events.InteractionCreate, async interaction => {
+// -------------------------
+// 명령어 처리
+// -------------------------
+client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (!interaction.guild) return;
 
@@ -173,10 +189,11 @@ client.on(Events.InteractionCreate, async interaction => {
 
       await addBoss(guildId, name, image);
 
-      return await interaction.reply({
+      await interaction.reply({
         content: `✅ 보스 등록 완료: ${name}`,
-        ephemeral: true
+        ephemeral: true,
       });
+      return;
     }
 
     if (interaction.commandName === '참여체크') {
@@ -184,10 +201,11 @@ client.on(Events.InteractionCreate, async interaction => {
       const boss = await getBoss(guildId, bossName);
 
       if (!boss) {
-        return await interaction.reply({
+        await interaction.reply({
           content: `❌ 등록되지 않은 보스입니다: ${bossName}`,
-          ephemeral: true
+          ephemeral: true,
         });
+        return;
       }
 
       await createParticipationCheck(guildId, bossName);
@@ -195,38 +213,45 @@ client.on(Events.InteractionCreate, async interaction => {
       const embed = new EmbedBuilder()
         .setTitle(`📢 ${bossName} 참여체크`)
         .setDescription('참여할 사람은 아래 버튼 기능 추가 전까지 수동으로 확인해 주세요.')
-        .setColor(0x5865F2)
+        .setColor(0x5865f2)
         .setTimestamp();
 
       if (boss.image && /^https?:\/\//i.test(boss.image)) {
         embed.setImage(boss.image);
       }
 
-      return await interaction.reply({
-        embeds: [embed]
+      await interaction.reply({
+        embeds: [embed],
       });
+      return;
     }
   } catch (error) {
     console.error('interaction error:', error);
 
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({
-        content: '❌ 처리 중 오류가 발생했습니다.',
-        ephemeral: true
-      });
-    } else {
-      await interaction.reply({
-        content: '❌ 처리 중 오류가 발생했습니다.',
-        ephemeral: true
-      });
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({
+          content: '❌ 처리 중 오류가 발생했습니다.',
+          ephemeral: true,
+        });
+      } else {
+        await interaction.reply({
+          content: '❌ 처리 중 오류가 발생했습니다.',
+          ephemeral: true,
+        });
+      }
+    } catch (replyError) {
+      console.error('응답 전송 실패:', replyError);
     }
   }
 });
 
+// -------------------------
+// 시작
+// -------------------------
 (async () => {
   try {
     await initDatabase();
-    await registerCommands();
     await client.login(token);
   } catch (error) {
     console.error('시작 실패:', error);
