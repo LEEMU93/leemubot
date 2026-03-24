@@ -109,6 +109,35 @@ async function initDatabase() {
     );
   `);
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS participation_checks (
+      check_id TEXT PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      boss_name TEXT NOT NULL,
+      password TEXT NOT NULL,
+      score INTEGER NOT NULL,
+      image_url TEXT,
+      time_text TEXT NOT NULL,
+      limit_minutes INTEGER NOT NULL,
+      created_at TIMESTAMP NOT NULL,
+      expires_at TIMESTAMP NOT NULL,
+      channel_id TEXT NOT NULL,
+      message_id TEXT
+    );
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS participation_entries (
+      id SERIAL PRIMARY KEY,
+      check_id TEXT NOT NULL REFERENCES participation_checks(check_id) ON DELETE CASCADE,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      joined_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(check_id, user_id)
+    );
+  `);
+
   console.log('DB 테이블 준비 완료');
 }
 
@@ -279,13 +308,12 @@ async function adjustInventoryItem(guildId, itemName, amount) {
     [newQuantity, guildId, itemName]
   );
 
-  // 수량 0이면 자동 삭제하고 싶으면 이 부분 주석 해제
-if (newQuantity === 0) {
-  await query(
-    `DELETE FROM inventory_items WHERE guild_id = $1 AND item_name = $2`,
-    [guildId, itemName]
-  );
-}
+  if (newQuantity === 0) {
+    await query(
+      `DELETE FROM inventory_items WHERE guild_id = $1 AND item_name = $2`,
+      [guildId, itemName]
+    );
+  }
 
   return newQuantity;
 }
@@ -356,7 +384,172 @@ async function getInventoryLogs(guildId, limit = 20) {
   return rows;
 }
 
+/* ---------------------- participation check helpers ------------------- */
+
+async function createParticipationCheck(data) {
+  await query(
+    `INSERT INTO participation_checks (
+      check_id, guild_id, boss_name, password, score, image_url,
+      time_text, limit_minutes, created_at, expires_at, channel_id, message_id
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TO_TIMESTAMP($9 / 1000.0), TO_TIMESTAMP($10 / 1000.0), $11, $12)`,
+    [
+      data.checkId,
+      data.guildId,
+      data.bossName,
+      data.password,
+      data.score,
+      data.imageUrl || null,
+      data.timeText,
+      data.limitMinutes,
+      data.createdAt,
+      data.expiresAt,
+      data.channelId,
+      data.messageId || null
+    ]
+  );
+}
+
+async function updateParticipationCheckMessageId(checkId, messageId) {
+  await query(
+    `UPDATE participation_checks
+     SET message_id = $1
+     WHERE check_id = $2`,
+    [messageId, checkId]
+  );
+}
+
+async function getParticipationCheck(checkId) {
+  const { rows } = await query(
+    `SELECT
+      check_id,
+      guild_id,
+      boss_name,
+      password,
+      score,
+      image_url,
+      time_text,
+      limit_minutes,
+      EXTRACT(EPOCH FROM created_at) * 1000 AS created_at_ms,
+      EXTRACT(EPOCH FROM expires_at) * 1000 AS expires_at_ms,
+      channel_id,
+      message_id
+     FROM participation_checks
+     WHERE check_id = $1`,
+    [checkId]
+  );
+
+  if (!rows[0]) return null;
+
+  const row = rows[0];
+
+  return {
+    checkId: row.check_id,
+    guildId: row.guild_id,
+    bossName: row.boss_name,
+    password: row.password,
+    score: Number(row.score),
+    imageUrl: row.image_url || null,
+    timeText: row.time_text,
+    limitMinutes: Number(row.limit_minutes),
+    createdAt: Number(row.created_at_ms),
+    expiresAt: Number(row.expires_at_ms),
+    channelId: row.channel_id,
+    messageId: row.message_id,
+    participants: []
+  };
+}
+
+async function getParticipationParticipants(checkId) {
+  const { rows } = await query(
+    `SELECT user_id AS id, user_name AS name
+     FROM participation_entries
+     WHERE check_id = $1
+     ORDER BY joined_at ASC, id ASC`,
+    [checkId]
+  );
+
+  return rows;
+}
+
+async function hasParticipationEntry(checkId, userId) {
+  const { rows } = await query(
+    `SELECT 1
+     FROM participation_entries
+     WHERE check_id = $1 AND user_id = $2`,
+    [checkId, userId]
+  );
+
+  return !!rows[0];
+}
+
+async function addParticipationEntry(checkId, guildId, userId, userName) {
+  await query(
+    `INSERT INTO participation_entries (check_id, guild_id, user_id, user_name)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (check_id, user_id) DO NOTHING`,
+    [checkId, guildId, userId, userName]
+  );
+}
+
+async function loadCheckData(checkId) {
+  let checkData = activeChecks.get(checkId);
+  if (checkData) return checkData;
+
+  const dbCheck = await getParticipationCheck(checkId);
+  if (!dbCheck) return null;
+
+  const participants = await getParticipationParticipants(checkId);
+  dbCheck.participants = participants;
+
+  activeChecks.set(checkId, dbCheck);
+  return dbCheck;
+}
+
+async function findLatestCheckByBoss(guildId, bossName) {
+  const { rows } = await query(
+    `SELECT check_id
+     FROM participation_checks
+     WHERE guild_id = $1 AND boss_name = $2
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [guildId, bossName]
+  );
+
+  if (!rows[0]) return null;
+
+  const checkId = rows[0].check_id;
+  const checkData = await loadCheckData(checkId);
+
+  if (!checkData) return null;
+
+  return { checkId, checkData };
+}
+
+async function refreshCheckMessage(checkId) {
+  const checkData = await loadCheckData(checkId);
+  if (!checkData) return;
+
+  checkData.participants = await getParticipationParticipants(checkId);
+
+  try {
+    const channel = await client.channels.fetch(checkData.channelId);
+    if (!channel || !channel.messages) return;
+    if (!checkData.messageId) return;
+
+    const message = await channel.messages.fetch(checkData.messageId);
+    await message.edit({
+      embeds: [buildCheckEmbed(checkData)],
+      components: [buildCheckButtons(checkId, isCheckExpired(checkData))]
+    });
+  } catch (error) {
+    console.error('참여체크 메시지 갱신 실패:', error);
+  }
+}
+
 async function deleteGuildData(guildId) {
+  await query(`DELETE FROM participation_entries WHERE guild_id = $1`, [guildId]);
+  await query(`DELETE FROM participation_checks WHERE guild_id = $1`, [guildId]);
   await query(`DELETE FROM inventory_logs WHERE guild_id = $1`, [guildId]);
   await query(`DELETE FROM inventory_items WHERE guild_id = $1`, [guildId]);
   await query(`DELETE FROM guild_assets WHERE guild_id = $1`, [guildId]);
@@ -446,38 +639,6 @@ function buildCheckEmbed(checkData) {
   }
 
   return embed;
-}
-
-function findLatestCheckByBoss(guildId, bossName) {
-  let matched = null;
-
-  for (const [checkId, checkData] of activeChecks.entries()) {
-    if (checkData.guildId === guildId && checkData.bossName === bossName) {
-      if (!matched || checkData.createdAt > matched.checkData.createdAt) {
-        matched = { checkId, checkData };
-      }
-    }
-  }
-
-  return matched;
-}
-
-async function refreshCheckMessage(checkId) {
-  const checkData = activeChecks.get(checkId);
-  if (!checkData) return;
-
-  try {
-    const channel = await client.channels.fetch(checkData.channelId);
-    if (!channel || !channel.messages) return;
-
-    const message = await channel.messages.fetch(checkData.messageId);
-    await message.edit({
-      embeds: [buildCheckEmbed(checkData)],
-      components: [buildCheckButtons(checkId, isCheckExpired(checkData))]
-    });
-  } catch (error) {
-    console.error('참여체크 메시지 갱신 실패:', error);
-  }
 }
 
 function formatKoreaDateTime(dateValue) {
@@ -943,7 +1104,8 @@ client.on(Events.InteractionCreate, async interaction => {
         const createdAt = Date.now();
         const expiresAt = createdAt + limitMinutes * 60 * 1000;
 
-        activeChecks.set(checkId, {
+        const checkPayload = {
+          checkId,
           guildId,
           bossName: boss.name,
           password,
@@ -956,7 +1118,10 @@ client.on(Events.InteractionCreate, async interaction => {
           expiresAt,
           channelId: interaction.channelId,
           messageId: null
-        });
+        };
+
+        activeChecks.set(checkId, checkPayload);
+        await createParticipationCheck(checkPayload);
 
         const checkData = activeChecks.get(checkId);
 
@@ -967,6 +1132,7 @@ client.on(Events.InteractionCreate, async interaction => {
         });
 
         checkData.messageId = message.id;
+        await updateParticipationCheckMessageId(checkId, message.id);
         return;
       }
 
@@ -979,7 +1145,7 @@ client.on(Events.InteractionCreate, async interaction => {
         const bossName = interaction.options.getString('보스');
         const targetUser = interaction.options.getUser('유저');
 
-        const foundCheck = findLatestCheckByBoss(guildId, bossName);
+        const foundCheck = await findLatestCheckByBoss(guildId, bossName);
         if (!foundCheck) {
           await interaction.reply({
             content: '해당 보스의 진행 중이거나 최근 참여체크를 찾을 수 없습니다.',
@@ -990,9 +1156,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
         const { checkId, checkData } = foundCheck;
 
-        const alreadyJoined = checkData.participants.some(
-          participant => participant.id === targetUser.id
-        );
+        const alreadyJoined = await hasParticipationEntry(checkId, targetUser.id);
 
         if (alreadyJoined) {
           await interaction.reply({ content: '이미 참여 명단에 등록된 유저입니다.', ephemeral: true });
@@ -1001,10 +1165,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
         const displayName = await getDisplayNameFromUser(interaction.guild, targetUser);
 
-        checkData.participants.push({
-          id: targetUser.id,
-          name: displayName
-        });
+        await addParticipationEntry(checkId, guildId, targetUser.id, displayName);
+        checkData.participants = await getParticipationParticipants(checkId);
 
         await adjustScore(guildId, targetUser.id, displayName, checkData.score);
         await refreshCheckMessage(checkId);
@@ -1380,7 +1542,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
     if (interaction.isButton()) {
       const [action, checkId] = interaction.customId.split('|');
-      const checkData = activeChecks.get(checkId);
+      const checkData = await loadCheckData(checkId);
 
       if (!checkData) {
         await interaction.reply({
@@ -1418,7 +1580,9 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (action === 'list') {
-        if (checkData.participants.length === 0) {
+        const participants = await getParticipationParticipants(checkId);
+
+        if (participants.length === 0) {
           await interaction.reply({
             content: '아직 참여자가 없습니다.',
             ephemeral: true
@@ -1426,7 +1590,9 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         }
 
-        const text = checkData.participants
+        checkData.participants = participants;
+
+        const text = participants
           .map((user, index) => `${index + 1}. ${user.name}`)
           .join('\n');
 
@@ -1443,7 +1609,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (action !== 'pwmodal') return;
 
-      const checkData = activeChecks.get(checkId);
+      const checkData = await loadCheckData(checkId);
 
       if (!checkData) {
         await interaction.reply({
@@ -1471,9 +1637,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      const alreadyJoined = checkData.participants.some(
-        participant => participant.id === interaction.user.id
-      );
+      const alreadyJoined = await hasParticipationEntry(checkId, interaction.user.id);
 
       if (alreadyJoined) {
         await interaction.reply({
@@ -1485,10 +1649,9 @@ client.on(Events.InteractionCreate, async interaction => {
 
       const displayName = getDisplayNameFromInteraction(interaction);
 
-      checkData.participants.push({
-        id: interaction.user.id,
-        name: displayName
-      });
+      await addParticipationEntry(checkId, interaction.guildId, interaction.user.id, displayName);
+
+      checkData.participants = await getParticipationParticipants(checkId);
 
       await adjustScore(interaction.guildId, interaction.user.id, displayName, checkData.score);
       await refreshCheckMessage(checkId);
@@ -1526,8 +1689,23 @@ setInterval(() => {
   for (const [checkId, checkData] of activeChecks.entries()) {
     if (now - checkData.createdAt > THIRTY_DAYS) {
       activeChecks.delete(checkId);
-      console.log(`30일 지난 참여체크 삭제: ${checkId}`);
+      console.log(`30일 지난 메모리 참여체크 삭제: ${checkId}`);
     }
+  }
+}, 60 * 60 * 1000);
+
+/* ------------------- participation check 30days cleanup -------------- */
+
+setInterval(async () => {
+  try {
+    await query(`
+      DELETE FROM participation_checks
+      WHERE created_at < NOW() - INTERVAL '30 days'
+    `);
+
+    console.log('30일 지난 참여체크 및 참여명단 자동 삭제 완료');
+  } catch (error) {
+    console.error('참여체크 자동 삭제 실패:', error);
   }
 }, 60 * 60 * 1000);
 
