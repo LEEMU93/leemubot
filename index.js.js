@@ -20,7 +20,10 @@ const { Pool } = require('pg');
 
 const token = process.env.TOKEN;
 const clientId = process.env.CLIENT_ID;
-const guildIdForCommands = process.env.GUILD_ID;
+const guildIdsForCommands = (process.env.GUILD_IDS || process.env.GUILD_ID || '')
+  .split(',')
+  .map((id) => id.trim())
+  .filter(Boolean);
 const databaseUrl = process.env.DATABASE_URL;
 
 if (!token) {
@@ -31,8 +34,8 @@ if (!clientId) {
   console.error('CLIENT_ID가 없습니다.');
   process.exit(1);
 }
-if (!guildIdForCommands) {
-  console.error('GUILD_ID가 없습니다.');
+if (guildIdsForCommands.length === 0) {
+  console.error('GUILD_IDS 또는 GUILD_ID가 없습니다.');
   process.exit(1);
 }
 if (!databaseUrl) {
@@ -725,11 +728,14 @@ async function registerCommands() {
   );
   console.log('기존 글로벌 명령어 삭제 완료');
 
-  await rest.put(
-    Routes.applicationGuildCommands(clientId, guildIdForCommands),
-    { body: commands.map((command) => command.toJSON()) }
-  );
-  console.log('길드 슬래시 명령어 등록 완료');
+  for (const guildId of guildIdsForCommands) {
+    await rest.put(
+      Routes.applicationGuildCommands(clientId, guildId),
+      { body: commands.map((command) => command.toJSON()) }
+    );
+
+    console.log(`길드 슬래시 명령어 등록 완료: ${guildId}`);
+  }
 }
 
 // -------------------------
